@@ -23,6 +23,7 @@ declare(strict_types=1);
 
 namespace pocketmine\entity\object;
 
+use InvalidArgumentException;
 use pocketmine\entity\animation\ItemEntityStackSizeChangeAnimation;
 use pocketmine\entity\Entity;
 use pocketmine\entity\EntitySizeInfo;
@@ -51,15 +52,11 @@ class ItemEntity extends Entity{
 	private const TAG_OWNER = "Owner"; //TAG_String
 	private const TAG_THROWER = "Thrower"; //TAG_String
 	public const TAG_ITEM = "Item"; //TAG_Compound
-
-	public static function getNetworkTypeId() : string{ return EntityIds::ITEM; }
-
-	public const MERGE_CHECK_PERIOD = 2; //0.1 seconds
-	public const DEFAULT_DESPAWN_DELAY = 6000; //5 minutes
-	public const NEVER_DESPAWN = -1;
-	public const MAX_DESPAWN_DELAY = 32767 + self::DEFAULT_DESPAWN_DELAY; //max value storable by mojang NBT :(
-
-	protected string $owner = "";
+	public const MERGE_CHECK_PERIOD = 2;
+	public const DEFAULT_DESPAWN_DELAY = 6000; //0.1 seconds
+	public const NEVER_DESPAWN = -1; //5 minutes
+	public const MAX_DESPAWN_DELAY = 32767 + self::DEFAULT_DESPAWN_DELAY;
+	protected string $owner = ""; //max value storable by mojang NBT :(
 	protected string $thrower = "";
 	protected int $pickupDelay = 0;
 	protected int $despawnDelay = self::DEFAULT_DESPAWN_DELAY;
@@ -67,10 +64,130 @@ class ItemEntity extends Entity{
 
 	public function __construct(Location $location, Item $item, ?CompoundTag $nbt = null){
 		if($item->isNull()){
-			throw new \InvalidArgumentException("Item entity must have a non-air item with a count of at least 1");
+			throw new InvalidArgumentException("Item entity must have a non-air item with a count of at least 1");
 		}
 		$this->item = clone $item;
 		parent::__construct($location, $nbt);
+	}
+
+	public static function getNetworkTypeId() : string{ return EntityIds::ITEM; }
+
+	public function canSaveWithChunk() : bool{
+		return !$this->item->isNull() && parent::canSaveWithChunk();
+	}
+
+	public function saveNBT() : CompoundTag{
+		$nbt = parent::saveNBT();
+		$nbt->setTag(self::TAG_ITEM, $this->item->nbtSerialize());
+		$nbt->setShort(self::TAG_HEALTH, (int) $this->getHealth());
+		if($this->despawnDelay === self::NEVER_DESPAWN){
+			$age = -32768;
+		}else{
+			$age = self::DEFAULT_DESPAWN_DELAY - $this->despawnDelay;
+		}
+		$nbt->setShort(self::TAG_AGE, $age);
+		$nbt->setShort(self::TAG_PICKUP_DELAY, $this->pickupDelay);
+		$nbt->setString(self::TAG_OWNER, $this->owner);
+		$nbt->setString(self::TAG_THROWER, $this->thrower);
+
+		return $nbt;
+	}
+
+	public function isFireProof() : bool{
+		return $this->item->isFireProof();
+	}
+
+	public function canCollideWith(Entity $entity) : bool{
+		return false;
+	}
+
+	public function canBeCollidedWith() : bool{
+		return false;
+	}
+
+	/**
+	 * Returns the number of ticks left before this item will despawn. If -1, the item will never despawn.
+	 */
+	public function getDespawnDelay() : int{
+		return $this->despawnDelay;
+	}
+
+	/**
+	 * @throws InvalidArgumentException
+	 */
+	public function setDespawnDelay(int $despawnDelay) : void{
+		if(($despawnDelay < 0 || $despawnDelay > self::MAX_DESPAWN_DELAY) && $despawnDelay !== self::NEVER_DESPAWN){
+			throw new InvalidArgumentException("Despawn ticker must be in range 0 ... " . self::MAX_DESPAWN_DELAY . " or " . self::NEVER_DESPAWN . ", got $despawnDelay");
+		}
+		$this->despawnDelay = $despawnDelay;
+	}
+
+	public function getOwner() : string{
+		return $this->owner;
+	}
+
+	public function setOwner(string $owner) : void{
+		$this->owner = $owner;
+	}
+
+	public function getThrower() : string{
+		return $this->thrower;
+	}
+
+	public function setThrower(string $thrower) : void{
+		$this->thrower = $thrower;
+	}
+
+	public function getOffsetPosition(Vector3 $vector3) : Vector3{
+		return $vector3->add(0, 0.125, 0);
+	}
+
+	public function onCollideWithPlayer(Player $player) : void{
+		if($this->getPickupDelay() !== 0){
+			return;
+		}
+
+		$item = $this->getItem();
+		$playerInventory = match (true) {
+			$player->getOffHandInventory()->getItem(0)->canStackWith($item) && $player->getOffHandInventory()->getAddableItemQuantity($item) > 0 => $player->getOffHandInventory(),
+			$player->getInventory()->getAddableItemQuantity($item) > 0 => $player->getInventory(),
+			default => null
+		};
+
+		$ev = new EntityItemPickupEvent($player, $this, $item, $playerInventory);
+		if($player->hasFiniteResources() && $playerInventory === null){
+			$ev->cancel();
+		}
+
+		$ev->call();
+		if($ev->isCancelled()){
+			return;
+		}
+
+		NetworkBroadcastUtils::broadcastEntityEventToSession(
+			$this->hasSpawnedSessions,
+			fn(EntityEventBroadcaster $broadcaster, array $recipients) => $broadcaster->onPickUpItem($recipients, $player, $this)
+		);
+
+		$inventory = $ev->getInventory();
+		if($inventory !== null){
+			foreach($inventory->addItem($ev->getItem()) as $remains){
+				$this->getWorld()->dropItem($this->location, $remains, new Vector3(0, 0, 0));
+			}
+		}
+		$this->flagForDespawn();
+	}
+
+	public function getPickupDelay() : int{
+		return $this->pickupDelay;
+	}
+
+	public function setPickupDelay(int $delay) : void{
+		$this->pickupDelay = $delay;
+	}
+
+	public function getItem() : Item{
+		return $this->item;
 	}
 
 	protected function getInitialSizeInfo() : EntitySizeInfo{ return new EntitySizeInfo(0.25, 0.25); }
@@ -203,6 +320,14 @@ class ItemEntity extends Entity{
 		return true;
 	}
 
+	public function setStackSize(int $newCount) : void{
+		if($newCount <= 0){
+			throw new InvalidArgumentException("Stack size must be at least 1");
+		}
+		$this->item->setCount($newCount);
+		$this->broadcastAnimation(new ItemEntityStackSizeChangeAnimation($this, $newCount));
+	}
+
 	protected function tryChangeMovement() : void{
 		$this->checkObstruction($this->location->x, $this->location->y, $this->location->z);
 		parent::tryChangeMovement();
@@ -210,84 +335,6 @@ class ItemEntity extends Entity{
 
 	protected function applyDragBeforeGravity() : bool{
 		return true;
-	}
-
-	public function canSaveWithChunk() : bool{
-		return !$this->item->isNull() && parent::canSaveWithChunk();
-	}
-
-	public function saveNBT() : CompoundTag{
-		$nbt = parent::saveNBT();
-		$nbt->setTag(self::TAG_ITEM, $this->item->nbtSerialize());
-		$nbt->setShort(self::TAG_HEALTH, (int) $this->getHealth());
-		if($this->despawnDelay === self::NEVER_DESPAWN){
-			$age = -32768;
-		}else{
-			$age = self::DEFAULT_DESPAWN_DELAY - $this->despawnDelay;
-		}
-		$nbt->setShort(self::TAG_AGE, $age);
-		$nbt->setShort(self::TAG_PICKUP_DELAY, $this->pickupDelay);
-		$nbt->setString(self::TAG_OWNER, $this->owner);
-		$nbt->setString(self::TAG_THROWER, $this->thrower);
-
-		return $nbt;
-	}
-
-	public function getItem() : Item{
-		return $this->item;
-	}
-
-	public function isFireProof() : bool{
-		return $this->item->isFireProof();
-	}
-
-	public function canCollideWith(Entity $entity) : bool{
-		return false;
-	}
-
-	public function canBeCollidedWith() : bool{
-		return false;
-	}
-
-	public function getPickupDelay() : int{
-		return $this->pickupDelay;
-	}
-
-	public function setPickupDelay(int $delay) : void{
-		$this->pickupDelay = $delay;
-	}
-
-	/**
-	 * Returns the number of ticks left before this item will despawn. If -1, the item will never despawn.
-	 */
-	public function getDespawnDelay() : int{
-		return $this->despawnDelay;
-	}
-
-	/**
-	 * @throws \InvalidArgumentException
-	 */
-	public function setDespawnDelay(int $despawnDelay) : void{
-		if(($despawnDelay < 0 || $despawnDelay > self::MAX_DESPAWN_DELAY) && $despawnDelay !== self::NEVER_DESPAWN){
-			throw new \InvalidArgumentException("Despawn ticker must be in range 0 ... " . self::MAX_DESPAWN_DELAY . " or " . self::NEVER_DESPAWN . ", got $despawnDelay");
-		}
-		$this->despawnDelay = $despawnDelay;
-	}
-
-	public function getOwner() : string{
-		return $this->owner;
-	}
-
-	public function setOwner(string $owner) : void{
-		$this->owner = $owner;
-	}
-
-	public function getThrower() : string{
-		return $this->thrower;
-	}
-
-	public function setThrower(string $thrower) : void{
-		$this->thrower = $thrower;
 	}
 
 	protected function sendSpawnPacket(Player $player) : void{
@@ -301,53 +348,5 @@ class ItemEntity extends Entity{
 			$this->getAllNetworkData(),
 			false //TODO: I have no idea what this is needed for, but right now we don't support fishing anyway
 		));
-	}
-
-	public function setStackSize(int $newCount) : void{
-		if($newCount <= 0){
-			throw new \InvalidArgumentException("Stack size must be at least 1");
-		}
-		$this->item->setCount($newCount);
-		$this->broadcastAnimation(new ItemEntityStackSizeChangeAnimation($this, $newCount));
-	}
-
-	public function getOffsetPosition(Vector3 $vector3) : Vector3{
-		return $vector3->add(0, 0.125, 0);
-	}
-
-	public function onCollideWithPlayer(Player $player) : void{
-		if($this->getPickupDelay() !== 0){
-			return;
-		}
-
-		$item = $this->getItem();
-		$playerInventory = match(true){
-			$player->getOffHandInventory()->getItem(0)->canStackWith($item) && $player->getOffHandInventory()->getAddableItemQuantity($item) > 0 => $player->getOffHandInventory(),
-			$player->getInventory()->getAddableItemQuantity($item) > 0 => $player->getInventory(),
-			default => null
-		};
-
-		$ev = new EntityItemPickupEvent($player, $this, $item, $playerInventory);
-		if($player->hasFiniteResources() && $playerInventory === null){
-			$ev->cancel();
-		}
-
-		$ev->call();
-		if($ev->isCancelled()){
-			return;
-		}
-
-		NetworkBroadcastUtils::broadcastEntityEvent(
-			$this->getViewers(),
-			fn(EntityEventBroadcaster $broadcaster, array $recipients) => $broadcaster->onPickUpItem($recipients, $player, $this)
-		);
-
-		$inventory = $ev->getInventory();
-		if($inventory !== null){
-			foreach($inventory->addItem($ev->getItem()) as $remains){
-				$this->getWorld()->dropItem($this->location, $remains, new Vector3(0, 0, 0));
-			}
-		}
-		$this->flagForDespawn();
 	}
 }

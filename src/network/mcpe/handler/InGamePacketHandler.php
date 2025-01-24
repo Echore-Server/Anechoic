@@ -23,6 +23,8 @@ declare(strict_types=1);
 
 namespace pocketmine\network\mcpe\handler;
 
+use InvalidArgumentException;
+use JsonException;
 use pocketmine\block\BaseSign;
 use pocketmine\block\Lectern;
 use pocketmine\block\tile\Sign;
@@ -107,6 +109,7 @@ use pocketmine\utils\Limits;
 use pocketmine\utils\TextFormat;
 use pocketmine\utils\Utils;
 use pocketmine\world\format\Chunk;
+use UnexpectedValueException;
 use function array_push;
 use function count;
 use function fmod;
@@ -129,24 +132,21 @@ use const JSON_THROW_ON_ERROR;
  */
 class InGamePacketHandler extends PacketHandler{
 	private const MAX_FORM_RESPONSE_DEPTH = 2; //modal/simple will be 1, custom forms 2 - they will never contain anything other than string|int|float|bool|null
-
+	public bool $forceMoveSync = false;
 	protected float $lastRightClickTime = 0.0;
 	protected ?UseItemTransactionData $lastRightClickData = null;
-
 	protected ?Vector3 $lastPlayerAuthInputPosition = null;
 	protected ?float $lastPlayerAuthInputYaw = null;
 	protected ?float $lastPlayerAuthInputPitch = null;
 	protected ?BitSet $lastPlayerAuthInputFlags = null;
-
-	public bool $forceMoveSync = false;
-
 	protected ?string $lastRequestedFullSkinId = null;
 
 	public function __construct(
 		private Player $player,
 		private NetworkSession $session,
 		private InventoryManager $inventoryManager
-	){}
+	){
+	}
 
 	public function handleText(TextPacket $packet) : bool{
 		if($packet->type === TextPacket::TYPE_CHAT){
@@ -160,16 +160,6 @@ class InGamePacketHandler extends PacketHandler{
 		//The client sends this every time it lands on the ground, even when using PlayerAuthInputPacket.
 		//Silence the debug spam that this causes.
 		return true;
-	}
-
-	private function resolveOnOffInputFlags(BitSet $inputFlags, int $startFlag, int $stopFlag) : ?bool{
-		$enabled = $inputFlags->get($startFlag);
-		$disabled = $inputFlags->get($stopFlag);
-		if($enabled !== $disabled){
-			return $enabled;
-		}
-		//neither flag was set, or both were set
-		return null;
 	}
 
 	public function handlePlayerAuthInput(PlayerAuthInputPacket $packet) : bool{
@@ -245,7 +235,7 @@ class InGamePacketHandler extends PacketHandler{
 		if(!$this->forceMoveSync && $hasMoved){
 			$this->lastPlayerAuthInputPosition = $rawPos;
 			//TODO: this packet has WAYYYYY more useful information that we're not using
-			$this->player->handleMovement($newPos);
+			$this->player->handleMovementFromNetwork($newPos, $packet);
 		}
 
 		$packetHandled = true;
@@ -294,6 +284,200 @@ class InGamePacketHandler extends PacketHandler{
 		}
 
 		return $packetHandled;
+	}
+
+	private function resolveOnOffInputFlags(BitSet $inputFlags, int $startFlag, int $stopFlag) : ?bool{
+		$enabled = $inputFlags->get($startFlag);
+		$disabled = $inputFlags->get($stopFlag);
+		if($enabled !== $disabled){
+			return $enabled;
+		}
+		//neither flag was set, or both were set
+		return null;
+	}
+
+	private function handlePlayerActionFromData(int $action, BlockPosition $blockPosition, int $face) : bool{
+		$pos = new Vector3($blockPosition->getX(), $blockPosition->getY(), $blockPosition->getZ());
+
+		switch($action){
+			case PlayerAction::START_BREAK:
+				self::validateFacing($face);
+				if(!$this->player->attackBlock($pos, $face)){
+					$this->syncBlocksNearby($pos, $face);
+				}
+
+				break;
+
+			case PlayerAction::ABORT_BREAK:
+			case PlayerAction::STOP_BREAK:
+				$this->player->stopBreakBlock($pos);
+				break;
+			case PlayerAction::START_SLEEPING:
+				//unused
+				break;
+			case PlayerAction::STOP_SLEEPING:
+				$this->player->stopSleep();
+				break;
+			case PlayerAction::CRACK_BREAK:
+				self::validateFacing($face);
+				$this->player->continueBreakBlock($pos, $face);
+				break;
+			case PlayerAction::INTERACT_BLOCK: //TODO: ignored (for now)
+				break;
+			case PlayerAction::CREATIVE_PLAYER_DESTROY_BLOCK:
+				//TODO: do we need to handle this?
+				break;
+			case PlayerAction::START_ITEM_USE_ON:
+			case PlayerAction::STOP_ITEM_USE_ON:
+				//TODO: this has no obvious use and seems only used for analytics in vanilla - ignore it
+				break;
+			default:
+				$this->session->getLogger()->debug("Unhandled/unknown player action type " . $action);
+				return false;
+		}
+
+		$this->player->setUsingItem(false);
+
+		return true;
+	}
+
+	/**
+	 * @throws PacketHandlingException
+	 */
+	private static function validateFacing(int $facing) : void{
+		if(!in_array($facing, Facing::ALL, true)){
+			throw new PacketHandlingException("Invalid facing value $facing");
+		}
+	}
+
+	/**
+	 * Syncs blocks nearby to ensure that the client and server agree on the world's blocks after a block interaction.
+	 */
+	private function syncBlocksNearby(Vector3 $blockPos, ?int $face) : void{
+		if($blockPos->distanceSquared($this->player->getLocation()) < 10000){
+			$blocks = $blockPos->sidesArray();
+			if($face !== null){
+				$sidePos = $blockPos->getSide($face);
+
+				/** @var Vector3[] $blocks */
+				array_push($blocks, ...$sidePos->sidesArray()); //getAllSides() on each of these will include $blockPos and $sidePos because they are next to each other
+			}else{
+				$blocks[] = $blockPos;
+			}
+			foreach($this->player->getWorld()->createBlockUpdatePackets($blocks) as $packet){
+				$this->session->sendDataPacket($packet);
+			}
+		}
+	}
+
+	private function handleUseItemTransaction(UseItemTransactionData $data) : bool{
+		$this->player->selectHotbarSlot($data->getHotbarSlot());
+
+		switch($data->getActionType()){
+			case UseItemTransactionData::ACTION_CLICK_BLOCK:
+				//TODO: start hack for client spam bug
+				$clickPos = $data->getClickPosition();
+				$spamBug = ($this->lastRightClickData !== null &&
+					microtime(true) - $this->lastRightClickTime < 0.1 && //100ms
+					$this->lastRightClickData->getPlayerPosition()->distanceSquared($data->getPlayerPosition()) < 0.00001 &&
+					$this->lastRightClickData->getBlockPosition()->equals($data->getBlockPosition()) &&
+					$this->lastRightClickData->getClickPosition()->distanceSquared($clickPos) < 0.00001 //signature spam bug has 0 distance, but allow some error
+				);
+				//get rid of continued spam if the player clicks and holds right-click
+				$this->lastRightClickData = $data;
+				$this->lastRightClickTime = microtime(true);
+				if($spamBug){
+					return true;
+				}
+				//TODO: end hack for client spam bug
+
+				self::validateFacing($data->getFace());
+
+				$blockPos = $data->getBlockPosition();
+				$vBlockPos = new Vector3($blockPos->getX(), $blockPos->getY(), $blockPos->getZ());
+				$this->player->interactBlock($vBlockPos, $data->getFace(), $clickPos);
+				//always sync this in case plugins caused a different result than the client expected
+				//we *could* try to enhance detection of plugin-altered behaviour, but this would require propagating
+				//more information up the stack. For now I think this is good enough.
+				//if only the client would tell us what blocks it thinks changed...
+				$this->syncBlocksNearby($vBlockPos, $data->getFace());
+				return true;
+			case UseItemTransactionData::ACTION_BREAK_BLOCK:
+				$blockPos = $data->getBlockPosition();
+				$vBlockPos = new Vector3($blockPos->getX(), $blockPos->getY(), $blockPos->getZ());
+				if(!$this->player->breakBlock($vBlockPos)){
+					$this->syncBlocksNearby($vBlockPos, null);
+				}
+				return true;
+			case UseItemTransactionData::ACTION_CLICK_AIR:
+				if($this->player->isUsingItem()){
+					if(!$this->player->consumeHeldItem()){
+						$hungerAttr = $this->player->getAttributeMap()->get(Attribute::HUNGER) ?? throw new AssumptionFailedError();
+						$hungerAttr->markSynchronized(false);
+					}
+					return true;
+				}
+				$this->player->useHeldItem();
+				return true;
+		}
+
+		return false;
+	}
+
+	private function handleSingleItemStackRequest(ItemStackRequest $request) : ItemStackResponse{
+		if(count($request->getActions()) > 60){
+			//recipe book auto crafting can affect all slots of the inventory when consuming inputs or producing outputs
+			//this means there could be as many as 50 CraftingConsumeInput actions or Place (taking the result) actions
+			//in a single request (there are certain ways items can be arranged which will result in the same stack
+			//being taken from multiple times, but this is behaviour with a calculable limit)
+			//this means there SHOULD be AT MOST 53 actions in a single request, but 60 is a nice round number.
+			//n64Stacks = ?
+			//n1Stacks = 45 - n64Stacks
+			//nItemsRequiredFor1Craft = 9
+			//nResults = floor((n1Stacks + (n64Stacks * 64)) / nItemsRequiredFor1Craft)
+			//nTakeActionsTotal = floor(64 / nResults) + max(1, 64 % nResults) + ((nResults * nItemsRequiredFor1Craft) - (n64Stacks * 64))
+			throw new PacketHandlingException("Too many actions in ItemStackRequest");
+		}
+		$executor = new ItemStackRequestExecutor($this->player, $this->inventoryManager, $request);
+		try{
+			$transaction = $executor->generateInventoryTransaction();
+			$result = $this->executeInventoryTransaction($transaction, $request->getRequestId());
+		}catch(ItemStackRequestProcessException $e){
+			$result = false;
+			$this->session->getLogger()->debug("ItemStackRequest #" . $request->getRequestId() . " failed: " . $e->getMessage());
+			$this->session->getLogger()->debug(implode("\n", Utils::printableExceptionInfo($e)));
+			$this->inventoryManager->requestSyncAll();
+		}
+
+		if(!$result){
+			return new ItemStackResponse(ItemStackResponse::RESULT_ERROR, $request->getRequestId());
+		}
+		return $executor->buildItemStackResponse();
+	}
+
+	private function executeInventoryTransaction(InventoryTransaction $transaction, int $requestId) : bool{
+		$this->player->setUsingItem(false);
+
+		$this->inventoryManager->setCurrentItemStackRequestId($requestId);
+		$this->inventoryManager->addTransactionPredictedSlotChanges($transaction);
+		try{
+			$transaction->execute();
+		}catch(TransactionValidationException $e){
+			$this->inventoryManager->requestSyncAll();
+			$logger = $this->session->getLogger();
+			$logger->debug("Invalid inventory transaction $requestId: " . $e->getMessage());
+
+			return false;
+		}catch(TransactionCancelledException){
+			$this->session->getLogger()->debug("Inventory transaction $requestId cancelled by a plugin");
+
+			return false;
+		}finally{
+			$this->inventoryManager->syncMismatchedPredictedSlotChanges();
+			$this->inventoryManager->setCurrentItemStackRequestId(null);
+		}
+
+		return true;
 	}
 
 	public function handleLevelSoundEventPacketV1(LevelSoundEventPacketV1 $packet) : bool{
@@ -366,31 +550,6 @@ class InGamePacketHandler extends PacketHandler{
 
 		$this->inventoryManager->setCurrentItemStackRequestId(null);
 		return $result;
-	}
-
-	private function executeInventoryTransaction(InventoryTransaction $transaction, int $requestId) : bool{
-		$this->player->setUsingItem(false);
-
-		$this->inventoryManager->setCurrentItemStackRequestId($requestId);
-		$this->inventoryManager->addTransactionPredictedSlotChanges($transaction);
-		try{
-			$transaction->execute();
-		}catch(TransactionValidationException $e){
-			$this->inventoryManager->requestSyncAll();
-			$logger = $this->session->getLogger();
-			$logger->debug("Invalid inventory transaction $requestId: " . $e->getMessage());
-
-			return false;
-		}catch(TransactionCancelledException){
-			$this->session->getLogger()->debug("Inventory transaction $requestId cancelled by a plugin");
-
-			return false;
-		}finally{
-			$this->inventoryManager->syncMismatchedPredictedSlotChanges();
-			$this->inventoryManager->setCurrentItemStackRequestId(null);
-		}
-
-		return true;
 	}
 
 	private function handleNormalTransaction(NormalTransactionData $data, int $itemStackRequestId) : bool{
@@ -472,89 +631,6 @@ class InGamePacketHandler extends PacketHandler{
 		return $this->executeInventoryTransaction($transaction, $itemStackRequestId);
 	}
 
-	private function handleUseItemTransaction(UseItemTransactionData $data) : bool{
-		$this->player->selectHotbarSlot($data->getHotbarSlot());
-
-		switch($data->getActionType()){
-			case UseItemTransactionData::ACTION_CLICK_BLOCK:
-				//TODO: start hack for client spam bug
-				$clickPos = $data->getClickPosition();
-				$spamBug = ($this->lastRightClickData !== null &&
-					microtime(true) - $this->lastRightClickTime < 0.1 && //100ms
-					$this->lastRightClickData->getPlayerPosition()->distanceSquared($data->getPlayerPosition()) < 0.00001 &&
-					$this->lastRightClickData->getBlockPosition()->equals($data->getBlockPosition()) &&
-					$this->lastRightClickData->getClickPosition()->distanceSquared($clickPos) < 0.00001 //signature spam bug has 0 distance, but allow some error
-				);
-				//get rid of continued spam if the player clicks and holds right-click
-				$this->lastRightClickData = $data;
-				$this->lastRightClickTime = microtime(true);
-				if($spamBug){
-					return true;
-				}
-				//TODO: end hack for client spam bug
-
-				self::validateFacing($data->getFace());
-
-				$blockPos = $data->getBlockPosition();
-				$vBlockPos = new Vector3($blockPos->getX(), $blockPos->getY(), $blockPos->getZ());
-				$this->player->interactBlock($vBlockPos, $data->getFace(), $clickPos);
-				//always sync this in case plugins caused a different result than the client expected
-				//we *could* try to enhance detection of plugin-altered behaviour, but this would require propagating
-				//more information up the stack. For now I think this is good enough.
-				//if only the client would tell us what blocks it thinks changed...
-				$this->syncBlocksNearby($vBlockPos, $data->getFace());
-				return true;
-			case UseItemTransactionData::ACTION_BREAK_BLOCK:
-				$blockPos = $data->getBlockPosition();
-				$vBlockPos = new Vector3($blockPos->getX(), $blockPos->getY(), $blockPos->getZ());
-				if(!$this->player->breakBlock($vBlockPos)){
-					$this->syncBlocksNearby($vBlockPos, null);
-				}
-				return true;
-			case UseItemTransactionData::ACTION_CLICK_AIR:
-				if($this->player->isUsingItem()){
-					if(!$this->player->consumeHeldItem()){
-						$hungerAttr = $this->player->getAttributeMap()->get(Attribute::HUNGER) ?? throw new AssumptionFailedError();
-						$hungerAttr->markSynchronized(false);
-					}
-					return true;
-				}
-				$this->player->useHeldItem();
-				return true;
-		}
-
-		return false;
-	}
-
-	/**
-	 * @throws PacketHandlingException
-	 */
-	private static function validateFacing(int $facing) : void{
-		if(!in_array($facing, Facing::ALL, true)){
-			throw new PacketHandlingException("Invalid facing value $facing");
-		}
-	}
-
-	/**
-	 * Syncs blocks nearby to ensure that the client and server agree on the world's blocks after a block interaction.
-	 */
-	private function syncBlocksNearby(Vector3 $blockPos, ?int $face) : void{
-		if($blockPos->distanceSquared($this->player->getLocation()) < 10000){
-			$blocks = $blockPos->sidesArray();
-			if($face !== null){
-				$sidePos = $blockPos->getSide($face);
-
-				/** @var Vector3[] $blocks */
-				array_push($blocks, ...$sidePos->sidesArray()); //getAllSides() on each of these will include $blockPos and $sidePos because they are next to each other
-			}else{
-				$blocks[] = $blockPos;
-			}
-			foreach($this->player->getWorld()->createBlockUpdatePackets($blocks) as $packet){
-				$this->session->sendDataPacket($packet);
-			}
-		}
-	}
-
 	private function handleUseItemOnEntityTransaction(UseItemOnEntityTransactionData $data) : bool{
 		$target = $this->player->getWorld()->getEntity($data->getActorRuntimeId());
 		if($target === null){
@@ -584,37 +660,6 @@ class InGamePacketHandler extends PacketHandler{
 		}
 
 		return false;
-	}
-
-	private function handleSingleItemStackRequest(ItemStackRequest $request) : ItemStackResponse{
-		if(count($request->getActions()) > 60){
-			//recipe book auto crafting can affect all slots of the inventory when consuming inputs or producing outputs
-			//this means there could be as many as 50 CraftingConsumeInput actions or Place (taking the result) actions
-			//in a single request (there are certain ways items can be arranged which will result in the same stack
-			//being taken from multiple times, but this is behaviour with a calculable limit)
-			//this means there SHOULD be AT MOST 53 actions in a single request, but 60 is a nice round number.
-			//n64Stacks = ?
-			//n1Stacks = 45 - n64Stacks
-			//nItemsRequiredFor1Craft = 9
-			//nResults = floor((n1Stacks + (n64Stacks * 64)) / nItemsRequiredFor1Craft)
-			//nTakeActionsTotal = floor(64 / nResults) + max(1, 64 % nResults) + ((nResults * nItemsRequiredFor1Craft) - (n64Stacks * 64))
-			throw new PacketHandlingException("Too many actions in ItemStackRequest");
-		}
-		$executor = new ItemStackRequestExecutor($this->player, $this->inventoryManager, $request);
-		try{
-			$transaction = $executor->generateInventoryTransaction();
-			$result = $this->executeInventoryTransaction($transaction, $request->getRequestId());
-		}catch(ItemStackRequestProcessException $e){
-			$result = false;
-			$this->session->getLogger()->debug("ItemStackRequest #" . $request->getRequestId() . " failed: " . $e->getMessage());
-			$this->session->getLogger()->debug(implode("\n", Utils::printableExceptionInfo($e)));
-			$this->inventoryManager->requestSyncAll();
-		}
-
-		if(!$result){
-			return new ItemStackResponse(ItemStackResponse::RESULT_ERROR, $request->getRequestId());
-		}
-		return $executor->buildItemStackResponse();
 	}
 
 	public function handleItemStackRequest(ItemStackRequestPacket $packet) : bool{
@@ -682,51 +727,6 @@ class InGamePacketHandler extends PacketHandler{
 		return $this->handlePlayerActionFromData($packet->action, $packet->blockPosition, $packet->face);
 	}
 
-	private function handlePlayerActionFromData(int $action, BlockPosition $blockPosition, int $face) : bool{
-		$pos = new Vector3($blockPosition->getX(), $blockPosition->getY(), $blockPosition->getZ());
-
-		switch($action){
-			case PlayerAction::START_BREAK:
-				self::validateFacing($face);
-				if(!$this->player->attackBlock($pos, $face)){
-					$this->syncBlocksNearby($pos, $face);
-				}
-
-				break;
-
-			case PlayerAction::ABORT_BREAK:
-			case PlayerAction::STOP_BREAK:
-				$this->player->stopBreakBlock($pos);
-				break;
-			case PlayerAction::START_SLEEPING:
-				//unused
-				break;
-			case PlayerAction::STOP_SLEEPING:
-				$this->player->stopSleep();
-				break;
-			case PlayerAction::CRACK_BREAK:
-				self::validateFacing($face);
-				$this->player->continueBreakBlock($pos, $face);
-				break;
-			case PlayerAction::INTERACT_BLOCK: //TODO: ignored (for now)
-				break;
-			case PlayerAction::CREATIVE_PLAYER_DESTROY_BLOCK:
-				//TODO: do we need to handle this?
-				break;
-			case PlayerAction::START_ITEM_USE_ON:
-			case PlayerAction::STOP_ITEM_USE_ON:
-				//TODO: this has no obvious use and seems only used for analytics in vanilla - ignore it
-				break;
-			default:
-				$this->session->getLogger()->debug("Unhandled/unknown player action type " . $action);
-				return false;
-		}
-
-		$this->player->setUsingItem(false);
-
-		return true;
-	}
-
 	public function handleSetActorMotion(SetActorMotionPacket $packet) : bool{
 		return true; //Not used: This packet is (erroneously) sent to the server when the client is riding a vehicle.
 	}
@@ -766,7 +766,7 @@ class InGamePacketHandler extends PacketHandler{
 
 			try{
 				$text = SignText::fromBlob($textBlobTag->getValue());
-			}catch(\InvalidArgumentException $e){
+			}catch(InvalidArgumentException $e){
 				throw PacketHandlingException::wrap($e, "Invalid sign text update");
 			}
 
@@ -776,7 +776,7 @@ class InGamePacketHandler extends PacketHandler{
 						$this->session->sendDataPacket($updatePacket);
 					}
 				}
-			}catch(\UnexpectedValueException $e){
+			}catch(UnexpectedValueException $e){
 				throw PacketHandlingException::wrap($e);
 			}
 
@@ -855,24 +855,6 @@ class InGamePacketHandler extends PacketHandler{
 		return false; //TODO
 	}
 
-	/**
-	 * @throws PacketHandlingException
-	 */
-	private function checkBookText(string $string, string $fieldName, int $softLimit, int $hardLimit, bool &$cancel) : string{
-		if(strlen($string) > $hardLimit){
-			throw new PacketHandlingException(sprintf("Book %s must be at most %d bytes, but have %d bytes", $fieldName, $hardLimit, strlen($string)));
-		}
-
-		$result = TextFormat::clean($string, false);
-		//strlen() is O(1), mb_strlen() is O(n)
-		if(strlen($result) > $softLimit * 4 || mb_strlen($result, 'UTF-8') > $softLimit){
-			$cancel = true;
-			$this->session->getLogger()->debug("Cancelled book edit due to $fieldName exceeded soft limit of $softLimit chars");
-		}
-
-		return $result;
-	}
-
 	public function handleBookEdit(BookEditPacket $packet) : bool{
 		$inventory = $this->player->getInventory();
 		if(!$inventory->slotExists($packet->inventorySlot)){
@@ -934,7 +916,7 @@ class InGamePacketHandler extends PacketHandler{
 		}
 
 		//for redundancy, in case of protocol changes, we don't want to pass these directly
-		$action = match($packet->type){
+		$action = match ($packet->type) {
 			BookEditPacket::TYPE_REPLACE_PAGE => PlayerEditBookEvent::ACTION_REPLACE_PAGE,
 			BookEditPacket::TYPE_ADD_PAGE => PlayerEditBookEvent::ACTION_ADD_PAGE,
 			BookEditPacket::TYPE_DELETE_PAGE => PlayerEditBookEvent::ACTION_DELETE_PAGE,
@@ -969,6 +951,24 @@ class InGamePacketHandler extends PacketHandler{
 		return true;
 	}
 
+	/**
+	 * @throws PacketHandlingException
+	 */
+	private function checkBookText(string $string, string $fieldName, int $softLimit, int $hardLimit, bool &$cancel) : string{
+		if(strlen($string) > $hardLimit){
+			throw new PacketHandlingException(sprintf("Book %s must be at most %d bytes, but have %d bytes", $fieldName, $hardLimit, strlen($string)));
+		}
+
+		$result = TextFormat::clean($string, false);
+		//strlen() is O(1), mb_strlen() is O(n)
+		if(strlen($result) > $softLimit * 4 || mb_strlen($result, 'UTF-8') > $softLimit){
+			$cancel = true;
+			$this->session->getLogger()->debug("Cancelled book edit due to $fieldName exceeded soft limit of $softLimit chars");
+		}
+
+		return $result;
+	}
+
 	public function handleModalFormResponse(ModalFormResponsePacket $packet) : bool{
 		if($packet->cancelReason !== null){
 			//TODO: make APIs for this to allow plugins to use this information
@@ -976,7 +976,7 @@ class InGamePacketHandler extends PacketHandler{
 		}elseif($packet->formData !== null){
 			try{
 				$responseData = json_decode($packet->formData, true, self::MAX_FORM_RESPONSE_DEPTH, JSON_THROW_ON_ERROR);
-			}catch(\JsonException $e){
+			}catch(JsonException $e){
 				throw PacketHandlingException::wrap($e, "Failed to decode form response data");
 			}
 			return $this->player->onFormSubmit($packet->formId, $responseData);

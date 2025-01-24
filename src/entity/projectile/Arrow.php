@@ -46,17 +46,13 @@ use function sqrt;
 
 class Arrow extends Projectile{
 
-	public static function getNetworkTypeId() : string{ return EntityIds::ARROW; }
-
 	public const PICKUP_NONE = 0;
 	public const PICKUP_ANY = 1;
 	public const PICKUP_CREATIVE = 2;
-
-	private const TAG_PICKUP = "pickup"; //TAG_Byte
-	public const TAG_CRIT = "crit"; //TAG_Byte
-	private const TAG_LIFE = "life"; //TAG_Short
-
-	protected float $damage = 2.0;
+private const TAG_PICKUP = "pickup";
+public const TAG_CRIT = "crit"; //TAG_Byte
+	private const TAG_LIFE = "life"; //TAG_Byte
+		protected float $damage = 2.0; //TAG_Short
 	protected int $pickupMode = self::PICKUP_ANY;
 	protected float $punchKnockback = 0.0;
 	protected int $collideTicks = 0;
@@ -65,6 +61,85 @@ class Arrow extends Projectile{
 	public function __construct(Location $location, ?Entity $shootingEntity, bool $critical, ?CompoundTag $nbt = null){
 		parent::__construct($location, $shootingEntity, $nbt);
 		$this->setCritical($critical);
+	}
+
+	public static function getNetworkTypeId() : string{ return EntityIds::ARROW; }
+
+	public function saveNBT() : CompoundTag{
+		$nbt = parent::saveNBT();
+		$nbt->setByte(self::TAG_PICKUP, $this->pickupMode);
+		$nbt->setByte(self::TAG_CRIT, $this->critical ? 1 : 0);
+		$nbt->setShort(self::TAG_LIFE, $this->collideTicks);
+		return $nbt;
+	}
+
+	public function getResultDamage() : int{
+		$base = (int) ceil($this->motion->length() * parent::getResultDamage());
+		if($this->isCritical()){
+			return ($base + mt_rand(0, (int) ($base / 2) + 1));
+		}else{
+			return $base;
+		}
+	}
+
+	public function isCritical() : bool{
+		return $this->critical;
+	}
+
+	public function setCritical(bool $value = true) : void{
+		$this->critical = $value;
+		$this->networkPropertiesDirty = true;
+	}
+
+	public function getPunchKnockback() : float{
+		return $this->punchKnockback;
+	}
+
+	public function setPunchKnockback(float $punchKnockback) : void{
+		$this->punchKnockback = $punchKnockback;
+	}
+
+	public function getPickupMode() : int{
+		return $this->pickupMode;
+	}
+
+	public function setPickupMode(int $pickupMode) : void{
+		$this->pickupMode = $pickupMode;
+	}
+
+	public function onCollideWithPlayer(Player $player) : void{
+		if($this->blockHit === null){
+			return;
+		}
+
+		$item = VanillaItems::ARROW();
+		$playerInventory = match (true) {
+			!$player->hasFiniteResources() => null, //arrows are not picked up in creative
+			$player->getOffHandInventory()->getItem(0)->canStackWith($item) && $player->getOffHandInventory()->canAddItem($item) => $player->getOffHandInventory(),
+			$player->getInventory()->canAddItem($item) => $player->getInventory(),
+			default => null
+		};
+
+		$ev = new EntityItemPickupEvent($player, $this, $item, $playerInventory);
+		if($player->hasFiniteResources() && $playerInventory === null){
+			$ev->cancel();
+		}
+		if($this->pickupMode === self::PICKUP_NONE || ($this->pickupMode === self::PICKUP_CREATIVE && !$player->isCreative())){
+			$ev->cancel();
+		}
+
+		$ev->call();
+		if($ev->isCancelled()){
+			return;
+		}
+
+		NetworkBroadcastUtils::broadcastEntityEventToSession(
+			$this->hasSpawnedSessions,
+			fn(EntityEventBroadcaster $broadcaster, array $recipients) => $broadcaster->onPickUpItem($recipients, $player, $this)
+		);
+
+		$ev->getInventory()?->addItem($ev->getItem());
+		$this->flagForDespawn();
 	}
 
 	protected function getInitialSizeInfo() : EntitySizeInfo{ return new EntitySizeInfo(0.25, 0.25); }
@@ -79,40 +154,6 @@ class Arrow extends Projectile{
 		$this->pickupMode = $nbt->getByte(self::TAG_PICKUP, self::PICKUP_ANY);
 		$this->critical = $nbt->getByte(self::TAG_CRIT, 0) === 1;
 		$this->collideTicks = $nbt->getShort(self::TAG_LIFE, $this->collideTicks);
-	}
-
-	public function saveNBT() : CompoundTag{
-		$nbt = parent::saveNBT();
-		$nbt->setByte(self::TAG_PICKUP, $this->pickupMode);
-		$nbt->setByte(self::TAG_CRIT, $this->critical ? 1 : 0);
-		$nbt->setShort(self::TAG_LIFE, $this->collideTicks);
-		return $nbt;
-	}
-
-	public function isCritical() : bool{
-		return $this->critical;
-	}
-
-	public function setCritical(bool $value = true) : void{
-		$this->critical = $value;
-		$this->networkPropertiesDirty = true;
-	}
-
-	public function getResultDamage() : int{
-		$base = (int) ceil($this->motion->length() * parent::getResultDamage());
-		if($this->isCritical()){
-			return ($base + mt_rand(0, (int) ($base / 2) + 1));
-		}else{
-			return $base;
-		}
-	}
-
-	public function getPunchKnockback() : float{
-		return $this->punchKnockback;
-	}
-
-	public function setPunchKnockback(float $punchKnockback) : void{
-		$this->punchKnockback = $punchKnockback;
 	}
 
 	protected function entityBaseTick(int $tickDiff = 1) : bool{
@@ -154,49 +195,6 @@ class Arrow extends Projectile{
 				$entityHit->setMotion($entityHit->getMotion()->add($this->motion->x * $multiplier, 0.1, $this->motion->z * $multiplier));
 			}
 		}
-	}
-
-	public function getPickupMode() : int{
-		return $this->pickupMode;
-	}
-
-	public function setPickupMode(int $pickupMode) : void{
-		$this->pickupMode = $pickupMode;
-	}
-
-	public function onCollideWithPlayer(Player $player) : void{
-		if($this->blockHit === null){
-			return;
-		}
-
-		$item = VanillaItems::ARROW();
-		$playerInventory = match(true){
-			!$player->hasFiniteResources() => null, //arrows are not picked up in creative
-			$player->getOffHandInventory()->getItem(0)->canStackWith($item) && $player->getOffHandInventory()->canAddItem($item) => $player->getOffHandInventory(),
-			$player->getInventory()->canAddItem($item) => $player->getInventory(),
-			default => null
-		};
-
-		$ev = new EntityItemPickupEvent($player, $this, $item, $playerInventory);
-		if($player->hasFiniteResources() && $playerInventory === null){
-			$ev->cancel();
-		}
-		if($this->pickupMode === self::PICKUP_NONE || ($this->pickupMode === self::PICKUP_CREATIVE && !$player->isCreative())){
-			$ev->cancel();
-		}
-
-		$ev->call();
-		if($ev->isCancelled()){
-			return;
-		}
-
-		NetworkBroadcastUtils::broadcastEntityEvent(
-			$this->getViewers(),
-			fn(EntityEventBroadcaster $broadcaster, array $recipients) => $broadcaster->onPickUpItem($recipients, $player, $this)
-		);
-
-		$ev->getInventory()?->addItem($ev->getItem());
-		$this->flagForDespawn();
 	}
 
 	protected function syncNetworkData(EntityMetadataCollection $properties) : void{

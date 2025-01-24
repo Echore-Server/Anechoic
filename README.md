@@ -20,6 +20,13 @@
 	<a href="https://github.com/pmmp/PocketMine-MP/releases/latest"><img alt="GitHub release (latest by SemVer)" src="https://img.shields.io/github/downloads/pmmp/PocketMine-MP/latest/total?sort=semver"></a>
 </p>
 
+## Anechoic
+Fork of PocketMine-MP, Focused on improving performance
+
+Not compatible with PocketMine-MP.
+
+Recommended for use on PvE servers.
+
 ## What is this?
 PocketMine-MP is a highly customisable server software for Minecraft: Bedrock Edition, built from scratch in PHP, with over 10 years of history.
 

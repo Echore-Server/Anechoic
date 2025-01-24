@@ -23,10 +23,16 @@ declare(strict_types=1);
 
 namespace pocketmine\network\mcpe;
 
+use Closure;
+use pocketmine\event\server\DataPacketSendEvent;
+use pocketmine\network\mcpe\compression\ZlibCompressor;
+use pocketmine\network\mcpe\convert\TypeConverter;
 use pocketmine\network\mcpe\protocol\ClientboundPacket;
+use pocketmine\network\mcpe\protocol\serializer\PacketSerializer;
 use pocketmine\player\Player;
+use pocketmine\Server;
 use pocketmine\timings\Timings;
-use function count;
+use pocketmine\utils\BinaryStream;
 use function spl_object_id;
 
 final class NetworkBroadcastUtils{
@@ -36,48 +42,133 @@ final class NetworkBroadcastUtils{
 	}
 
 	/**
-	 * @param Player[]            $recipients
+	 * @param NetworkSession[]    $recipients
 	 * @param ClientboundPacket[] $packets
+	 *
+	 * Expecting StandardPacketBroadcaster
 	 */
-	public static function broadcastPackets(array $recipients, array $packets) : bool{
-		if(count($packets) === 0){
-			throw new \InvalidArgumentException("Cannot broadcast empty list of packets");
+	public static function broadcastPacketsToSession(array $recipients, array $packets, bool $callEvent = true) : void{
+		if(empty($recipients)){
+			return;
 		}
 
-		return Timings::$broadcastPackets->time(function() use ($recipients, $packets) : bool{
-			/** @var NetworkSession[] $sessions */
-			$sessions = [];
-			foreach($recipients as $player){
-				if($player->isConnected()){
-					$sessions[] = $player->getNetworkSession();
+		if($callEvent && DataPacketSendEvent::hasHandlers()){
+			$ev = new DataPacketSendEvent($recipients, $packets);
+			$ev->call();
+			if($ev->isCancelled()){
+				return;
+			}
+			$packets = $ev->getPackets();
+		}
+
+
+		$compressor = ZlibCompressor::getInstance(); // pmmp hardcode gaming
+
+		$totalLength = 0;
+		$batchBuffer = new BinaryStream();
+		$packetBuffers = [];
+		foreach($packets as $pk){
+			$buffer = NetworkSession::encodePacketTimed(PacketSerializer::encoder(), $pk);
+			$bufferLen = strlen($buffer);
+			$totalLength += (((int) log($bufferLen, 128)) + 1) + $bufferLen;
+
+			// encodeRaw
+			$batchBuffer->putUnsignedVarInt($bufferLen);
+			$batchBuffer->put($buffer);
+			$packetBuffers[] = $buffer;
+		}
+
+		$threshold = $compressor->getCompressionThreshold();
+
+		if($threshold !== null && $totalLength >= $threshold){
+			$batch = Server::getInstance()->prepareBatch($batchBuffer->getBuffer(), $compressor, timings: Timings::$playerNetworkSendCompressBroadcast);
+			foreach($recipients as $recipient){
+				if(!$recipient->isConnected()){
+					continue;
+				}
+				$recipient->queueCompressed($batch);
+			}
+		}else{
+			foreach($recipients as $recipient){
+				if(!$recipient->isConnected()){
+					continue;
+				}
+				foreach($packetBuffers as $buffer){
+					$recipient->addToSendBuffer($buffer);
 				}
 			}
-			if(count($sessions) === 0){
-				return false;
-			}
-
-			/** @var PacketBroadcaster[] $uniqueBroadcasters */
-			$uniqueBroadcasters = [];
-			/** @var NetworkSession[][] $broadcasterTargets */
-			$broadcasterTargets = [];
-			foreach($sessions as $recipient){
-				$broadcaster = $recipient->getBroadcaster();
-				$uniqueBroadcasters[spl_object_id($broadcaster)] = $broadcaster;
-				$broadcasterTargets[spl_object_id($broadcaster)][spl_object_id($recipient)] = $recipient;
-			}
-			foreach($uniqueBroadcasters as $broadcaster){
-				$broadcaster->broadcastPackets($broadcasterTargets[spl_object_id($broadcaster)], $packets);
-			}
-
-			return true;
-		});
+		}
 	}
 
 	/**
-	 * @param Player[] $recipients
-	 * @phpstan-param \Closure(EntityEventBroadcaster, array<int, NetworkSession>) : void $callback
+	 * @param Player[]            $recipients
+	 * @param ClientboundPacket[] $packets
+	 *
+	 * Expecting StandardPacketBroadcaster
 	 */
-	public static function broadcastEntityEvent(array $recipients, \Closure $callback) : void{
+	public static function broadcastPackets(array $recipients, array $packets, bool $callEvent = true) : void{
+		if(empty($recipients)){
+			return;
+		}
+
+		if($callEvent && DataPacketSendEvent::hasHandlers()){
+			$sessions = [];
+			foreach($recipients as $player){
+				$sessions[] = $player->getNetworkSession();
+			}
+			$ev = new DataPacketSendEvent($sessions, $packets);
+			$ev->call();
+			if($ev->isCancelled()){
+				return;
+			}
+			$packets = $ev->getPackets();
+		}
+
+
+		$compressor = ZlibCompressor::getInstance(); // pmmp hardcode gaming
+
+		$totalLength = 0;
+		$batchBuffer = new BinaryStream();
+		$packetBuffers = [];
+		foreach($packets as $pk){
+			$buffer = NetworkSession::encodePacketTimed(PacketSerializer::encoder(), $pk);
+			$bufferLen = strlen($buffer);
+			$totalLength += (((int) log($bufferLen, 128)) + 1) + $bufferLen;
+
+			// encodeRaw
+			$batchBuffer->putUnsignedVarInt($bufferLen);
+			$batchBuffer->put($buffer);
+			$packetBuffers[] = $buffer;
+		}
+
+		$threshold = $compressor->getCompressionThreshold();
+
+		if($threshold !== null && $totalLength >= $threshold){
+			$batch = Server::getInstance()->prepareBatch($batchBuffer->getBuffer(), $compressor, timings: Timings::$playerNetworkSendCompressBroadcast);
+			foreach($recipients as $recipient){
+				if(!$recipient->isOnline()){
+					continue;
+				}
+				$recipient->getNetworkSession()->queueCompressed($batch);
+			}
+		}else{
+			foreach($recipients as $recipient){
+				if(!$recipient->isOnline()){
+					continue;
+				}
+				foreach($packetBuffers as $buffer){
+					$recipient->getNetworkSession()->addToSendBuffer($buffer);
+				}
+			}
+		}
+	}
+
+	/**
+	 * @param Player[]                                                                   $recipients
+	 *
+	 * @phpstan-param Closure(EntityEventBroadcaster, array<int, NetworkSession>) : void $callback
+	 */
+	public static function broadcastEntityEvent(array $recipients, Closure $callback) : void{
 		$uniqueBroadcasters = [];
 		$broadcasterTargets = [];
 
@@ -91,5 +182,17 @@ final class NetworkBroadcastUtils{
 		foreach($uniqueBroadcasters as $k => $broadcaster){
 			$callback($broadcaster, $broadcasterTargets[$k]);
 		}
+	}
+
+
+	/**
+	 * @param NetworkSession[]                                                           $recipients
+	 *
+	 * @phpstan-param Closure(EntityEventBroadcaster, array<int, NetworkSession>) : void $callback
+	 */
+	public static function broadcastEntityEventToSession(array $recipients, Closure $callback) : void{
+		$broadcaster = new StandardEntityEventBroadcaster(new StandardPacketBroadcaster(Server::getInstance()), TypeConverter::getInstance());
+
+		$callback($broadcaster, $recipients);
 	}
 }

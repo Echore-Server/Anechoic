@@ -98,20 +98,13 @@ class Human extends Living implements ProjectileSource, InventoryHolder{
 	private const TAG_SKIN_CAPE_DATA = "CapeData"; //TAG_ByteArray
 	private const TAG_SKIN_GEOMETRY_NAME = "GeometryName"; //TAG_String
 	private const TAG_SKIN_GEOMETRY_DATA = "GeometryData"; //TAG_ByteArray
-
-	public static function getNetworkTypeId() : string{ return EntityIds::PLAYER; }
-
 	protected PlayerInventory $inventory;
 	protected PlayerOffHandInventory $offHandInventory;
 	protected PlayerEnderInventory $enderInventory;
-
 	protected UuidInterface $uuid;
-
 	protected Skin $skin;
-
 	protected HungerManager $hungerManager;
 	protected ExperienceManager $xpManager;
-
 	protected int $xpSeed;
 
 	public function __construct(Location $location, Skin $skin, ?CompoundTag $nbt = null){
@@ -119,7 +112,7 @@ class Human extends Living implements ProjectileSource, InventoryHolder{
 		parent::__construct($location, $nbt);
 	}
 
-	protected function getInitialSizeInfo() : EntitySizeInfo{ return new EntitySizeInfo(1.8, 0.6, 1.62); }
+	public static function getNetworkTypeId() : string{ return EntityIds::PLAYER; }
 
 	/**
 	 * @throws InvalidSkinException
@@ -137,10 +130,6 @@ class Human extends Living implements ProjectileSource, InventoryHolder{
 			$skinTag->getString(self::TAG_SKIN_GEOMETRY_NAME, ""),
 			$skinTag->getByteArray(self::TAG_SKIN_GEOMETRY_DATA, "")
 		);
-	}
-
-	public function getUniqueId() : UuidInterface{
-		return $this->uuid;
 	}
 
 	/**
@@ -170,6 +159,10 @@ class Human extends Living implements ProjectileSource, InventoryHolder{
 		]);
 	}
 
+	public function getUniqueId() : UuidInterface{
+		return $this->uuid;
+	}
+
 	public function jump() : void{
 		parent::jump();
 		if($this->isSprinting()){
@@ -180,22 +173,14 @@ class Human extends Living implements ProjectileSource, InventoryHolder{
 	}
 
 	public function emote(string $emoteId) : void{
-		NetworkBroadcastUtils::broadcastEntityEvent(
-			$this->getViewers(),
+		NetworkBroadcastUtils::broadcastEntityEventToSession(
+			$this->hasSpawnedSessions,
 			fn(EntityEventBroadcaster $broadcaster, array $recipients) => $broadcaster->onEmote($recipients, $this, $emoteId)
 		);
 	}
 
 	public function getHungerManager() : HungerManager{
 		return $this->hungerManager;
-	}
-
-	/**
-	 * Returns whether the Human can eat food. This may return a different result than {@link HungerManager::isHungry()},
-	 * as HungerManager only handles the hunger bar.
-	 */
-	public function canEat() : bool{
-		return $this->hungerManager->isHungry() || $this->getWorld()->getDifficulty() === World::DIFFICULTY_PEACEFUL;
 	}
 
 	public function consumeObject(Consumable $consumable) : bool{
@@ -206,13 +191,12 @@ class Human extends Living implements ProjectileSource, InventoryHolder{
 		return parent::consumeObject($consumable);
 	}
 
-	protected function applyConsumptionResults(Consumable $consumable) : void{
-		if($consumable instanceof FoodSource){
-			$this->hungerManager->addFood($consumable->getFoodRestore());
-			$this->hungerManager->addSaturation($consumable->getSaturationRestore());
-		}
-
-		parent::applyConsumptionResults($consumable);
+	/**
+	 * Returns whether the Human can eat food. This may return a different result than {@link HungerManager::isHungry()},
+	 * as HungerManager only handles the hunger bar.
+	 */
+	public function canEat() : bool{
+		return $this->hungerManager->isHungry() || $this->getWorld()->getDifficulty() === World::DIFFICULTY_PEACEFUL;
 	}
 
 	public function getXpManager() : ExperienceManager{
@@ -237,138 +221,10 @@ class Human extends Living implements ProjectileSource, InventoryHolder{
 		return min(100, 7 * $this->xpManager->getXpLevel());
 	}
 
-	public function getInventory() : PlayerInventory{
-		return $this->inventory;
-	}
-
 	public function getOffHandInventory() : PlayerOffHandInventory{ return $this->offHandInventory; }
 
 	public function getEnderInventory() : PlayerEnderInventory{
 		return $this->enderInventory;
-	}
-
-	/**
-	 * For Human entities which are not players, sets their properties such as nametag, skin and UUID from NBT.
-	 */
-	protected function initHumanData(CompoundTag $nbt) : void{
-		//TODO: use of NIL UUID for namespace is a hack; we should provide a proper UUID for the namespace
-		$this->uuid = Uuid::uuid3(Uuid::NIL, ((string) $this->getId()) . $this->skin->getSkinData() . $this->getNameTag());
-	}
-
-	/**
-	 * @param Item[] $items
-	 * @phpstan-param array<int, Item> $items
-	 */
-	private static function populateInventoryFromListTag(Inventory $inventory, array $items) : void{
-		$listeners = $inventory->getListeners()->toArray();
-		$inventory->getListeners()->clear();
-
-		$inventory->setContents($items);
-
-		$inventory->getListeners()->add(...$listeners);
-	}
-
-	protected function initEntity(CompoundTag $nbt) : void{
-		parent::initEntity($nbt);
-
-		$this->hungerManager = new HungerManager($this);
-		$this->xpManager = new ExperienceManager($this);
-
-		$this->inventory = new PlayerInventory($this);
-		$syncHeldItem = fn() => NetworkBroadcastUtils::broadcastEntityEvent(
-			$this->getViewers(),
-			fn(EntityEventBroadcaster $broadcaster, array $recipients) => $broadcaster->onMobMainHandItemChange($recipients, $this)
-		);
-		$this->inventory->getListeners()->add(new CallbackInventoryListener(
-			function(Inventory $unused, int $slot, Item $unused2) use ($syncHeldItem) : void{
-				if($slot === $this->inventory->getHeldItemIndex()){
-					$syncHeldItem();
-				}
-			},
-			function(Inventory $unused, array $oldItems) use ($syncHeldItem) : void{
-				if(array_key_exists($this->inventory->getHeldItemIndex(), $oldItems)){
-					$syncHeldItem();
-				}
-			}
-		));
-		$this->offHandInventory = new PlayerOffHandInventory($this);
-		$this->enderInventory = new PlayerEnderInventory($this);
-		$this->initHumanData($nbt);
-
-		$inventoryTag = $nbt->getListTag(self::TAG_INVENTORY);
-		if($inventoryTag !== null){
-			$inventoryItems = [];
-			$armorInventoryItems = [];
-
-			/** @var CompoundTag $item */
-			foreach($inventoryTag as $i => $item){
-				$slot = $item->getByte(SavedItemStackData::TAG_SLOT);
-				if($slot >= 0 && $slot < 9){ //Hotbar
-					//Old hotbar saving stuff, ignore it
-				}elseif($slot >= 100 && $slot < 104){ //Armor
-					$armorInventoryItems[$slot - 100] = Item::nbtDeserialize($item);
-				}elseif($slot >= 9 && $slot < $this->inventory->getSize() + 9){
-					$inventoryItems[$slot - 9] = Item::nbtDeserialize($item);
-				}
-			}
-
-			self::populateInventoryFromListTag($this->inventory, $inventoryItems);
-			self::populateInventoryFromListTag($this->armorInventory, $armorInventoryItems);
-		}
-		$offHand = $nbt->getCompoundTag(self::TAG_OFF_HAND_ITEM);
-		if($offHand !== null){
-			$this->offHandInventory->setItem(0, Item::nbtDeserialize($offHand));
-		}
-		$this->offHandInventory->getListeners()->add(CallbackInventoryListener::onAnyChange(fn() => NetworkBroadcastUtils::broadcastEntityEvent(
-			$this->getViewers(),
-			fn(EntityEventBroadcaster $broadcaster, array $recipients) => $broadcaster->onMobOffHandItemChange($recipients, $this)
-		)));
-
-		$enderChestInventoryTag = $nbt->getListTag(self::TAG_ENDER_CHEST_INVENTORY);
-		if($enderChestInventoryTag !== null){
-			$enderChestInventoryItems = [];
-
-			/** @var CompoundTag $item */
-			foreach($enderChestInventoryTag as $i => $item){
-				$enderChestInventoryItems[$item->getByte(SavedItemStackData::TAG_SLOT)] = Item::nbtDeserialize($item);
-			}
-			self::populateInventoryFromListTag($this->enderInventory, $enderChestInventoryItems);
-		}
-
-		$this->inventory->setHeldItemIndex($nbt->getInt(self::TAG_SELECTED_INVENTORY_SLOT, 0));
-		$this->inventory->getHeldItemIndexChangeListeners()->add(fn() => NetworkBroadcastUtils::broadcastEntityEvent(
-			$this->getViewers(),
-			fn(EntityEventBroadcaster $broadcaster, array $recipients) => $broadcaster->onMobMainHandItemChange($recipients, $this)
-		));
-
-		$this->hungerManager->setFood((float) $nbt->getInt(self::TAG_FOOD_LEVEL, (int) $this->hungerManager->getFood()));
-		$this->hungerManager->setExhaustion($nbt->getFloat(self::TAG_FOOD_EXHAUSTION_LEVEL, $this->hungerManager->getExhaustion()));
-		$this->hungerManager->setSaturation($nbt->getFloat(self::TAG_FOOD_SATURATION_LEVEL, $this->hungerManager->getSaturation()));
-		$this->hungerManager->setFoodTickTimer($nbt->getInt(self::TAG_FOOD_TICK_TIMER, $this->hungerManager->getFoodTickTimer()));
-
-		$this->xpManager->setXpAndProgressNoEvent(
-			$nbt->getInt(self::TAG_XP_LEVEL, 0),
-			$nbt->getFloat(self::TAG_XP_PROGRESS, 0.0));
-		$this->xpManager->setLifetimeTotalXp($nbt->getInt(self::TAG_LIFETIME_XP_TOTAL, 0));
-
-		if(($xpSeedTag = $nbt->getTag(self::TAG_XP_SEED)) instanceof IntTag){
-			$this->xpSeed = $xpSeedTag->getValue();
-		}else{
-			$this->xpSeed = EnchantingHelper::generateSeed();
-		}
-	}
-
-	protected function entityBaseTick(int $tickDiff = 1) : bool{
-		$hasUpdate = parent::entityBaseTick($tickDiff);
-
-		$this->hungerManager->tick($tickDiff);
-		$this->xpManager->tick($tickDiff);
-
-		return $hasUpdate;
-	}
-
-	public function getName() : string{
-		return $this->getNameTag();
 	}
 
 	public function applyDamageModifiers(EntityDamageEvent $source) : void{
@@ -381,30 +237,6 @@ class Human extends Living implements ProjectileSource, InventoryHolder{
 			$compensation = $this->getHealth() - $source->getFinalDamage() - 1;
 			if($compensation <= -1){
 				$source->setModifier($compensation, EntityDamageEvent::MODIFIER_TOTEM);
-			}
-		}
-	}
-
-	protected function applyPostDamageEffects(EntityDamageEvent $source) : void{
-		parent::applyPostDamageEffects($source);
-		$totemModifier = $source->getModifier(EntityDamageEvent::MODIFIER_TOTEM);
-		if($totemModifier < 0){ //Totem prevented death
-			$this->effectManager->clear();
-
-			$this->effectManager->add(new EffectInstance(VanillaEffects::REGENERATION(), 40 * 20, 1));
-			$this->effectManager->add(new EffectInstance(VanillaEffects::FIRE_RESISTANCE(), 40 * 20, 1));
-			$this->effectManager->add(new EffectInstance(VanillaEffects::ABSORPTION(), 5 * 20, 1));
-
-			$this->broadcastAnimation(new TotemUseAnimation($this));
-			$this->broadcastSound(new TotemUseSound());
-
-			$hand = $this->inventory->getItemInHand();
-			if($hand instanceof Totem){
-				$hand->pop(); //Plugins could alter max stack size
-				$this->inventory->setItemInHand($hand);
-			}elseif(($offHand = $this->offHandInventory->getItem(0)) instanceof Totem){
-				$offHand->pop();
-				$this->offHandInventory->setItem(0, $offHand);
 			}
 		}
 	}
@@ -487,6 +319,166 @@ class Human extends Living implements ProjectileSource, InventoryHolder{
 		}
 	}
 
+	public function getOffsetPosition(Vector3 $vector3) : Vector3{
+		return $vector3->add(0, 1.621, 0); //TODO: +0.001 hack for MCPE falling underground
+	}
+
+	protected function getInitialSizeInfo() : EntitySizeInfo{ return new EntitySizeInfo(1.8, 0.6, 1.62); }
+
+	protected function applyConsumptionResults(Consumable $consumable) : void{
+		if($consumable instanceof FoodSource){
+			$this->hungerManager->addFood($consumable->getFoodRestore());
+			$this->hungerManager->addSaturation($consumable->getSaturationRestore());
+		}
+
+		parent::applyConsumptionResults($consumable);
+	}
+
+	protected function initEntity(CompoundTag $nbt) : void{
+		parent::initEntity($nbt);
+
+		$this->hungerManager = new HungerManager($this);
+		$this->xpManager = new ExperienceManager($this);
+
+		$this->inventory = new PlayerInventory($this);
+		$syncHeldItem = fn() => NetworkBroadcastUtils::broadcastEntityEventToSession(
+			$this->hasSpawnedSessions,
+			fn(EntityEventBroadcaster $broadcaster, array $recipients) => $broadcaster->onMobMainHandItemChange($recipients, $this)
+		);
+		$this->inventory->getListeners()->add(new CallbackInventoryListener(
+			function(Inventory $unused, int $slot, Item $unused2) use ($syncHeldItem) : void{
+				if($slot === $this->inventory->getHeldItemIndex()){
+					$syncHeldItem();
+				}
+			},
+			function(Inventory $unused, array $oldItems) use ($syncHeldItem) : void{
+				if(array_key_exists($this->inventory->getHeldItemIndex(), $oldItems)){
+					$syncHeldItem();
+				}
+			}
+		));
+		$this->offHandInventory = new PlayerOffHandInventory($this);
+		$this->enderInventory = new PlayerEnderInventory($this);
+		$this->initHumanData($nbt);
+
+		$inventoryTag = $nbt->getListTag(self::TAG_INVENTORY);
+		if($inventoryTag !== null){
+			$inventoryItems = [];
+			$armorInventoryItems = [];
+
+			/** @var CompoundTag $item */
+			foreach($inventoryTag as $i => $item){
+				$slot = $item->getByte(SavedItemStackData::TAG_SLOT);
+				if($slot >= 0 && $slot < 9){ //Hotbar
+					//Old hotbar saving stuff, ignore it
+				}elseif($slot >= 100 && $slot < 104){ //Armor
+					$armorInventoryItems[$slot - 100] = Item::nbtDeserialize($item);
+				}elseif($slot >= 9 && $slot < $this->inventory->getSize() + 9){
+					$inventoryItems[$slot - 9] = Item::nbtDeserialize($item);
+				}
+			}
+
+			self::populateInventoryFromListTag($this->inventory, $inventoryItems);
+			self::populateInventoryFromListTag($this->armorInventory, $armorInventoryItems);
+		}
+		$offHand = $nbt->getCompoundTag(self::TAG_OFF_HAND_ITEM);
+		if($offHand !== null){
+			$this->offHandInventory->setItem(0, Item::nbtDeserialize($offHand));
+		}
+		$this->offHandInventory->getListeners()->add(CallbackInventoryListener::onAnyChange(fn() => NetworkBroadcastUtils::broadcastEntityEventToSession(
+			$this->hasSpawnedSessions,
+			fn(EntityEventBroadcaster $broadcaster, array $recipients) => $broadcaster->onMobOffHandItemChange($recipients, $this)
+		)));
+
+		$enderChestInventoryTag = $nbt->getListTag(self::TAG_ENDER_CHEST_INVENTORY);
+		if($enderChestInventoryTag !== null){
+			$enderChestInventoryItems = [];
+
+			/** @var CompoundTag $item */
+			foreach($enderChestInventoryTag as $i => $item){
+				$enderChestInventoryItems[$item->getByte(SavedItemStackData::TAG_SLOT)] = Item::nbtDeserialize($item);
+			}
+			self::populateInventoryFromListTag($this->enderInventory, $enderChestInventoryItems);
+		}
+
+		$this->inventory->setHeldItemIndex($nbt->getInt(self::TAG_SELECTED_INVENTORY_SLOT, 0));
+		$this->inventory->getHeldItemIndexChangeListeners()->add(fn() => NetworkBroadcastUtils::broadcastEntityEventToSession(
+			$this->hasSpawnedSessions,
+			fn(EntityEventBroadcaster $broadcaster, array $recipients) => $broadcaster->onMobMainHandItemChange($recipients, $this)
+		));
+
+		$this->hungerManager->setFood((float) $nbt->getInt(self::TAG_FOOD_LEVEL, (int) $this->hungerManager->getFood()));
+		$this->hungerManager->setExhaustion($nbt->getFloat(self::TAG_FOOD_EXHAUSTION_LEVEL, $this->hungerManager->getExhaustion()));
+		$this->hungerManager->setSaturation($nbt->getFloat(self::TAG_FOOD_SATURATION_LEVEL, $this->hungerManager->getSaturation()));
+		$this->hungerManager->setFoodTickTimer($nbt->getInt(self::TAG_FOOD_TICK_TIMER, $this->hungerManager->getFoodTickTimer()));
+
+		$this->xpManager->setXpAndProgressNoEvent(
+			$nbt->getInt(self::TAG_XP_LEVEL, 0),
+			$nbt->getFloat(self::TAG_XP_PROGRESS, 0.0));
+		$this->xpManager->setLifetimeTotalXp($nbt->getInt(self::TAG_LIFETIME_XP_TOTAL, 0));
+
+		if(($xpSeedTag = $nbt->getTag(self::TAG_XP_SEED)) instanceof IntTag){
+			$this->xpSeed = $xpSeedTag->getValue();
+		}else{
+			$this->xpSeed = EnchantingHelper::generateSeed();
+		}
+	}
+
+	/**
+	 * For Human entities which are not players, sets their properties such as nametag, skin and UUID from NBT.
+	 */
+	protected function initHumanData(CompoundTag $nbt) : void{
+		//TODO: use of NIL UUID for namespace is a hack; we should provide a proper UUID for the namespace
+		$this->uuid = Uuid::uuid3(Uuid::NIL, ((string) $this->getId()) . $this->skin->getSkinData() . $this->getNameTag());
+	}
+
+	/**
+	 * @param Item[]                   $items
+	 *
+	 * @phpstan-param array<int, Item> $items
+	 */
+	private static function populateInventoryFromListTag(Inventory $inventory, array $items) : void{
+		$listeners = $inventory->getListeners()->toArray();
+		$inventory->getListeners()->clear();
+
+		$inventory->setContents($items);
+
+		$inventory->getListeners()->add(...$listeners);
+	}
+
+	protected function entityBaseTick(int $tickDiff = 1) : bool{
+		$hasUpdate = parent::entityBaseTick($tickDiff);
+
+		$this->hungerManager->tick($tickDiff);
+		$this->xpManager->tick($tickDiff);
+
+		return $hasUpdate;
+	}
+
+	protected function applyPostDamageEffects(EntityDamageEvent $source) : void{
+		parent::applyPostDamageEffects($source);
+		$totemModifier = $source->getModifier(EntityDamageEvent::MODIFIER_TOTEM);
+		if($totemModifier < 0){ //Totem prevented death
+			$this->effectManager->clear();
+
+			$this->effectManager->add(new EffectInstance(VanillaEffects::REGENERATION(), 40 * 20, 1));
+			$this->effectManager->add(new EffectInstance(VanillaEffects::FIRE_RESISTANCE(), 40 * 20, 1));
+			$this->effectManager->add(new EffectInstance(VanillaEffects::ABSORPTION(), 5 * 20, 1));
+
+			$this->broadcastAnimation(new TotemUseAnimation($this));
+			$this->broadcastSound(new TotemUseSound());
+
+			$hand = $this->inventory->getItemInHand();
+			if($hand instanceof Totem){
+				$hand->pop(); //Plugins could alter max stack size
+				$this->inventory->setItemInHand($hand);
+			}elseif(($offHand = $this->offHandInventory->getItem(0)) instanceof Totem){
+				$offHand->pop();
+				$this->offHandInventory->setItem(0, $offHand);
+			}
+		}
+	}
+
 	protected function sendSpawnPacket(Player $player) : void{
 		$networkSession = $player->getNetworkSession();
 		$typeConverter = $networkSession->getTypeConverter();
@@ -533,8 +525,12 @@ class Human extends Living implements ProjectileSource, InventoryHolder{
 		}
 	}
 
-	public function getOffsetPosition(Vector3 $vector3) : Vector3{
-		return $vector3->add(0, 1.621, 0); //TODO: +0.001 hack for MCPE falling underground
+	public function getName() : string{
+		return $this->getNameTag();
+	}
+
+	public function getInventory() : PlayerInventory{
+		return $this->inventory;
 	}
 
 	protected function onDispose() : void{

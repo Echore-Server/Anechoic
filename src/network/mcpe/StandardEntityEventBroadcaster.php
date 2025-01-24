@@ -54,13 +54,7 @@ final class StandardEntityEventBroadcaster implements EntityEventBroadcaster{
 	public function __construct(
 		private PacketBroadcaster $broadcaster,
 		private TypeConverter $typeConverter
-	){}
-
-	/**
-	 * @param NetworkSession[] $recipients
-	 */
-	private function sendDataPacket(array $recipients, ClientboundPacket $packet) : void{
-		$this->broadcaster->broadcastPackets($recipients, [$packet]);
+	){
 	}
 
 	public function syncAttributes(array $recipients, Living $entity, array $attributes) : void{
@@ -71,6 +65,13 @@ final class StandardEntityEventBroadcaster implements EntityEventBroadcaster{
 				0
 			));
 		}
+	}
+
+	/**
+	 * @param NetworkSession[] $recipients
+	 */
+	private function sendDataPacket(array $recipients, ClientboundPacket $packet) : void{
+		NetworkBroadcastUtils::broadcastPacketsToSession($recipients, [$packet]);
 	}
 
 	public function syncActorData(array $recipients, Entity $entity, array $properties) : void{
