@@ -109,7 +109,6 @@ class Item implements JsonSerializable{
 	 * @param string[] $enchantmentTags
 	 *
 	 * @see VanillaItems
-	 *
 	 */
 	public function __construct(
 		private ItemIdentifier $identifier,
@@ -624,7 +623,7 @@ class Item implements JsonSerializable{
 	/**
 	 * Compares an Item to this Item and check if they match.
 	 *
-	 * @param bool $checkDamage @deprecated
+	 * @param bool $checkDamage   @deprecated
 	 * @param bool $checkCompound Whether to verify that the items' NBT match.
 	 */
 	final public function equals(Item $item, bool $checkDamage = true, bool $checkCompound = true) : bool{

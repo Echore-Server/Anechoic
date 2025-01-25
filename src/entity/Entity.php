@@ -22,14 +22,12 @@
 declare(strict_types=1);
 
 /**
- * All the entity classes
+ * All the entity classes.
  */
 
 namespace pocketmine\entity;
 
 use Generator;
-use InvalidArgumentException;
-use LogicException;
 use pocketmine\block\Block;
 use pocketmine\block\Water;
 use pocketmine\entity\animation\Animation;
@@ -71,7 +69,6 @@ use pocketmine\world\format\Chunk;
 use pocketmine\world\Position;
 use pocketmine\world\sound\Sound;
 use pocketmine\world\World;
-use ReflectionClass;
 use function abs;
 use function array_map;
 use function assert;
@@ -87,20 +84,17 @@ use function spl_object_id;
 use const M_PI_2;
 
 abstract class Entity{
-
 	public const MOTION_THRESHOLD = 0.00001;
+	public const TAG_POS = 'Pos'; // TAG_List<TAG_Double>|TAG_List<TAG_Float>
+	public const TAG_MOTION = 'Motion'; // TAG_List<TAG_Double>|TAG_List<TAG_Float>
+	public const TAG_ROTATION = 'Rotation'; // TAG_List<TAG_Float>
 	protected const STEP_CLIP_MULTIPLIER = 0.4;
 
-	private const TAG_FIRE = "Fire"; //TAG_Short
-	private const TAG_ON_GROUND = "OnGround"; //TAG_Byte
-	private const TAG_FALL_DISTANCE = "FallDistance"; //TAG_Float
-	private const TAG_CUSTOM_NAME = "CustomName"; //TAG_String
-	private const TAG_CUSTOM_NAME_VISIBLE = "CustomNameVisible"; //TAG_Byte
-	public const TAG_POS = "Pos"; //TAG_List<TAG_Double>|TAG_List<TAG_Float>
-	public const TAG_MOTION = "Motion"; //TAG_List<TAG_Double>|TAG_List<TAG_Float>
-	public const TAG_ROTATION = "Rotation"; //TAG_List<TAG_Float>
-
-	private static int $entityCount = 1;
+	private const TAG_FIRE = 'Fire'; // TAG_Short
+	private const TAG_ON_GROUND = 'OnGround'; // TAG_Byte
+	private const TAG_FALL_DISTANCE = 'FallDistance'; // TAG_Float
+	private const TAG_CUSTOM_NAME = 'CustomName'; // TAG_String
+	private const TAG_CUSTOM_NAME_VISIBLE = 'CustomNameVisible'; // TAG_Byte
 	public AxisAlignedBB $boundingBox;
 	public bool $onGround = false;
 	public EntitySizeInfo $size;
@@ -112,18 +106,20 @@ abstract class Entity{
 	public bool $isCollidedHorizontally = false;
 	public bool $isCollidedVertically = false;
 	public int $noDamageTicks = 0;
+
 	/**
 	 * @var Player[]
+	 *
 	 * @phpstan-var array<int, Player>
 	 */
 	protected array $hasSpawned = [];
-	/**
-	 * @var array<int, NetworkSession>
-	 */
+
+	/** @var array<int, NetworkSession> */
 	protected array $hasSpawnedSessions = [];
 	protected int $id;
 	protected ?EntityDamageEvent $lastDamageCause = null;
-	/** @var Block[]|null */
+
+	/** @var null|Block[] */
 	protected ?array $blocksAround = null;
 	protected Location $location;
 	protected Location $lastLocation;
@@ -142,10 +138,10 @@ abstract class Entity{
 	protected bool $closed = false;
 	protected TimingsHandler $timings;
 	protected bool $networkPropertiesDirty = false;
-	protected string $nameTag = "";
+	protected string $nameTag = '';
 	protected bool $nameTagVisible = true;
 	protected bool $alwaysShowNameTag = false;
-	protected string $scoreTag = "";
+	protected string $scoreTag = '';
 	protected float $scale = 1.0;
 	protected bool $canClimb = false;
 	protected bool $canClimbWalls = false;
@@ -154,6 +150,10 @@ abstract class Entity{
 	protected bool $silent = false;
 	protected ?int $ownerId = null;
 	protected ?int $targetId = null;
+
+	private static int $entityCount = 1;
+	private ?Vector3 $cacheDirectionVector = null;
+	private ?Vector2 $cacheDirectionPlane = null;
 	private EntityMetadataCollection $networkProperties;
 	private float $health = 20.0;
 	private int $maxHealth = 20;
@@ -164,7 +164,7 @@ abstract class Entity{
 
 	public function __construct(Location $location, ?CompoundTag $nbt = null){
 		if($this->constructorCalled){
-			throw new LogicException("Attempted to call constructor for an Entity multiple times");
+			throw new \LogicException('Attempted to call constructor for an Entity multiple times');
 		}
 		$this->constructorCalled = true;
 		Utils::checkLocationNotInfOrNaN($location);
@@ -183,7 +183,7 @@ abstract class Entity{
 		$this->boundingBox = new AxisAlignedBB(0, 0, 0, 0, 0, 0);
 		$this->recalculateBoundingBox();
 
-		if($nbt !== null){
+		if(null !== $nbt){
 			$this->motion = EntityDataHelper::parseVec3($nbt, self::TAG_MOTION, true);
 		}else{
 			$this->motion = Vector3::zero();
@@ -205,22 +205,13 @@ abstract class Entity{
 		$this->scheduleUpdate();
 	}
 
-	abstract protected function getInitialSizeInfo() : EntitySizeInfo;
+	public function __destruct(){
+		$this->close();
+	}
 
-	/**
-	 * Returns the percentage by which the entity's velocity is reduced per tick when moving through air.
-	 * The entity's velocity is multiplied by 1 minus this value.
-	 *
-	 * @return float 0-1
-	 */
-	abstract protected function getInitialDragMultiplier() : float;
-
-	/**
-	 * Returns the downwards acceleration of the entity when falling, in blocks/tick².
-	 *
-	 * @return float minimum 0
-	 */
-	abstract protected function getInitialGravity() : float;
+	public function __toString(){
+		return (new \ReflectionClass($this))->getShortName() . '(' . $this->getId() . ')';
+	}
 
 	/**
 	 * Returns a new runtime entity ID for a new entity.
@@ -233,50 +224,9 @@ abstract class Entity{
 		return $this->location->getWorld();
 	}
 
-	protected function recalculateBoundingBox() : void{
-		$halfWidth = $this->size->getWidth() / 2;
-
-		$this->boundingBox = new AxisAlignedBB(
-			$this->location->x - $halfWidth,
-			$this->location->y + $this->ySize,
-			$this->location->z - $halfWidth,
-			$this->location->x + $halfWidth,
-			$this->location->y + $this->size->getHeight() + $this->ySize,
-			$this->location->z + $halfWidth
-		);
-	}
-
-	protected function resetLastMovements() : void{
-		$this->lastLocation = $this->location->asLocation();
-		$this->lastMotion = clone $this->motion;
-	}
-
-	protected function addAttributes() : void{
-
-	}
-
-	protected function initEntity(CompoundTag $nbt) : void{
-		$this->fireTicks = $nbt->getShort(self::TAG_FIRE, 0);
-
-		$this->onGround = $nbt->getByte(self::TAG_ON_GROUND, 0) !== 0;
-
-		$this->fallDistance = $nbt->getFloat(self::TAG_FALL_DISTANCE, 0.0);
-
-		if(($customNameTag = $nbt->getTag(self::TAG_CUSTOM_NAME)) instanceof StringTag){
-			$this->setNameTag($customNameTag->getValue());
-
-			if(($customNameVisibleTag = $nbt->getTag(self::TAG_CUSTOM_NAME_VISIBLE)) instanceof StringTag){
-				//Older versions incorrectly saved this as a string (see 890f72dbf23a77f294169b79590770470041adc4)
-				$this->setNameTagVisible($customNameVisibleTag->getValue() !== "");
-			}else{
-				$this->setNameTagVisible($nbt->getByte(self::TAG_CUSTOM_NAME_VISIBLE, 1) !== 0);
-			}
-		}
-	}
-
 	final public function scheduleUpdate() : void{
 		if($this->closed){
-			throw new LogicException("Cannot schedule update on garbage entity " . get_class($this));
+			throw new \LogicException('Cannot schedule update on garbage entity ' . get_class($this));
 		}
 		$this->getWorld()->updateEntities[$this->id] = $this;
 	}
@@ -299,7 +249,7 @@ abstract class Entity{
 	}
 
 	public function getScoreTag() : ?string{
-		return $this->scoreTag; //TODO: maybe this shouldn't be nullable?
+		return $this->scoreTag; // TODO: maybe this shouldn't be nullable?
 	}
 
 	public function setScoreTag(string $score) : void{
@@ -313,7 +263,7 @@ abstract class Entity{
 
 	public function setScale(float $value) : void{
 		if($value <= 0){
-			throw new InvalidArgumentException("Scale must be greater than 0");
+			throw new \InvalidArgumentException('Scale must be greater than 0');
 		}
 		$this->scale = $value;
 		$this->setSize($this->getInitialSizeInfo()->scale($value));
@@ -321,12 +271,6 @@ abstract class Entity{
 
 	public function getSize() : EntitySizeInfo{
 		return $this->size;
-	}
-
-	protected function setSize(EntitySizeInfo $size) : void{
-		$this->size = $size;
-		$this->recalculateBoundingBox();
-		$this->networkPropertiesDirty = true;
 	}
 
 	/**
@@ -396,19 +340,19 @@ abstract class Entity{
 	 * Returns the owning entity, or null if the entity was not found.
 	 */
 	public function getOwningEntity() : ?Entity{
-		return $this->ownerId !== null ? $this->server->getWorldManager()->findEntity($this->ownerId) : null;
+		return null !== $this->ownerId ? $this->server->getWorldManager()->findEntity($this->ownerId) : null;
 	}
 
 	/**
 	 * Sets the owner of the entity. Passing null will remove the current owner.
 	 *
-	 * @throws InvalidArgumentException if the supplied entity is not valid
+	 * @throws \InvalidArgumentException if the supplied entity is not valid
 	 */
 	public function setOwningEntity(?Entity $owner) : void{
-		if($owner === null){
+		if(null === $owner){
 			$this->ownerId = null;
 		}elseif($owner->closed){
-			throw new InvalidArgumentException("Supplied owning entity is garbage and cannot be used");
+			throw new \InvalidArgumentException('Supplied owning entity is garbage and cannot be used');
 		}else{
 			$this->ownerId = $owner->getId();
 		}
@@ -431,19 +375,19 @@ abstract class Entity{
 	 * This is used for things like hostile mobs attacking entities, and for fishing rods reeling hit entities in.
 	 */
 	public function getTargetEntity() : ?Entity{
-		return $this->targetId !== null ? $this->server->getWorldManager()->findEntity($this->targetId) : null;
+		return null !== $this->targetId ? $this->server->getWorldManager()->findEntity($this->targetId) : null;
 	}
 
 	/**
 	 * Sets the entity's target entity. Passing null will remove the current target.
 	 *
-	 * @throws InvalidArgumentException if the target entity is not valid
+	 * @throws \InvalidArgumentException if the target entity is not valid
 	 */
 	public function setTargetEntity(?Entity $target) : void{
-		if($target === null){
+		if(null === $target){
 			$this->targetId = null;
 		}elseif($target->closed){
-			throw new InvalidArgumentException("Supplied target entity is garbage and cannot be used");
+			throw new \InvalidArgumentException('Supplied target entity is garbage and cannot be used');
 		}else{
 			$this->targetId = $target->getId();
 		}
@@ -470,22 +414,22 @@ abstract class Entity{
 			->setTag(self::TAG_POS, new ListTag([
 				new DoubleTag($this->location->x),
 				new DoubleTag($this->location->y),
-				new DoubleTag($this->location->z)
+				new DoubleTag($this->location->z),
 			]))
 			->setTag(self::TAG_MOTION, new ListTag([
 				new DoubleTag($this->motion->x),
 				new DoubleTag($this->motion->y),
-				new DoubleTag($this->motion->z)
+				new DoubleTag($this->motion->z),
 			]))
 			->setTag(self::TAG_ROTATION, new ListTag([
 				new FloatTag($this->location->yaw),
-				new FloatTag($this->location->pitch)
+				new FloatTag($this->location->pitch),
 			]));
 
-		if(!($this instanceof Player)){
+		if(!$this instanceof Player){
 			EntityFactory::getInstance()->injectSaveId(get_class($this), $nbt);
 
-			if($this->getNameTag() !== ""){
+			if('' !== $this->getNameTag()){
 				$nbt->setString(self::TAG_CUSTOM_NAME, $this->getNameTag());
 				$nbt->setByte(self::TAG_CUSTOM_NAME_VISIBLE, $this->isNameTagVisible() ? 1 : 0);
 			}
@@ -532,7 +476,7 @@ abstract class Entity{
 	}
 
 	/**
-	 * Sets the health of the Entity. This won't send any update to the players
+	 * Sets the health of the Entity. This won't send any update to the players.
 	 */
 	public function setHealth(float $amount) : void{
 		if($amount === $this->health){
@@ -591,11 +535,11 @@ abstract class Entity{
 	}
 
 	/**
-	 * @throws InvalidArgumentException
+	 * @throws \InvalidArgumentException
 	 */
 	public function setFireTicks(int $fireTicks) : void{
-		if($fireTicks < 0 || $fireTicks > 0x7fff){
-			throw new InvalidArgumentException("Fire ticks must be in range 0 ... " . 0x7fff . ", got $fireTicks");
+		if($fireTicks < 0 || $fireTicks > 0x7FFF){
+			throw new \InvalidArgumentException('Fire ticks must be in range 0 ... ' . 0x7FFF . ", got {$fireTicks}");
 		}
 		if(!$this->isFireProof()){
 			$this->fireTicks = $fireTicks;
@@ -620,7 +564,7 @@ abstract class Entity{
 	}
 
 	public function setGravity(float $gravity) : void{
-		Utils::checkFloatNotInfOrNaN("gravity", $gravity);
+		Utils::checkFloatNotInfOrNaN('gravity', $gravity);
 		$this->gravity = $gravity;
 	}
 
@@ -652,16 +596,24 @@ abstract class Entity{
 	}
 
 	public function getDirectionVector() : Vector3{
-		$y = -sin(deg2rad($this->location->pitch));
-		$xz = cos(deg2rad($this->location->pitch));
-		$x = -$xz * sin(deg2rad($this->location->yaw));
-		$z = $xz * cos(deg2rad($this->location->yaw));
+		if(null === $this->cacheDirectionVector){
+			$y = -sin(deg2rad($this->location->pitch));
+			$xz = cos(deg2rad($this->location->pitch));
+			$x = -$xz * sin(deg2rad($this->location->yaw));
+			$z = $xz * cos(deg2rad($this->location->yaw));
 
-		return (new Vector3($x, $y, $z))->normalize();
+			return $this->cacheDirectionVector = (new Vector3($x, $y, $z))->normalize();
+		}
+
+		return clone $this->cacheDirectionVector;
 	}
 
 	public function getDirectionPlane() : Vector2{
-		return (new Vector2(-cos(deg2rad($this->location->yaw) - M_PI_2), -sin(deg2rad($this->location->yaw) - M_PI_2)))->normalize();
+		if(null === $this->cacheDirectionPlane){
+			return $this->cacheDirectionPlane = (new Vector2(-cos(deg2rad($this->location->yaw) - M_PI_2), -sin(deg2rad($this->location->yaw) - M_PI_2)))->normalize();
+		}
+
+		return clone $this->cacheDirectionPlane;
 	}
 
 	public function onUpdate(int $currentTick) : bool{
@@ -672,7 +624,7 @@ abstract class Entity{
 		$tickDiff = $currentTick - $this->lastUpdate;
 		if($tickDiff <= 0){
 			if(!$this->justCreated){
-				$this->server->getLogger()->debug("Expected tick difference of at least 1, got $tickDiff for " . get_class($this));
+				$this->server->getLogger()->debug("Expected tick difference of at least 1, got {$tickDiff} for " . get_class($this));
 			}
 
 			return true;
@@ -703,7 +655,7 @@ abstract class Entity{
 				abs($this->motion->z) <= self::MOTION_THRESHOLD ? 0 : null
 			);
 
-			if(floatval($this->motion->x) !== 0.0 || floatval($this->motion->y) !== 0.0 || floatval($this->motion->z) !== 0.0){
+			if(0.0 !== floatval($this->motion->x) || 0.0 !== floatval($this->motion->y) || 0.0 !== floatval($this->motion->z)){
 				$this->move($this->motion->x, $this->motion->y, $this->motion->z);
 			}
 
@@ -718,7 +670,460 @@ abstract class Entity{
 
 		$this->timings->stopTiming();
 
-		return ($hasUpdate || $this->hasMovementUpdate());
+		return $hasUpdate || $this->hasMovementUpdate();
+	}
+
+	/**
+	 * Flags the entity to be removed from the world on the next tick.
+	 */
+	public function flagForDespawn() : void{
+		$this->needsDespawn = true;
+		$this->scheduleUpdate();
+	}
+
+	/**
+	 * Returns whether the entity needs a movement update on the next tick.
+	 */
+	public function hasMovementUpdate() : bool{
+		return
+			$this->forceMovementUpdate
+			|| 0.0 !== floatval($this->motion->x)
+			|| 0.0 !== floatval($this->motion->y)
+			|| 0.0 !== floatval($this->motion->z)
+			|| !$this->onGround;
+	}
+
+	public function resetFallDistance() : void{
+		$this->fallDistance = 0.0;
+	}
+
+	/**
+	 * Things such as movement in water, burning, etc. may be predicted by the client. This is sometimes not desirable,
+	 * since server-side logic may differ from client-side prediction. However, things like movement smoothing
+	 * (interpolation) are also controlled by this, so it should be used with care.
+	 *
+	 * Setting this flag will also disable player movement inputs, but this should not be relied on, as cheat clients
+	 * will be able to bypass it.
+	 */
+	public function setNoClientPredictions(bool $value = true) : void{
+		$this->noClientPredictions = $value;
+		$this->networkPropertiesDirty = true;
+	}
+
+	public function getOffsetPosition(Vector3 $vector3) : Vector3{
+		return $vector3;
+	}
+
+	public function getMotion() : Vector3{
+		return clone $this->motion;
+	}
+
+	public function setMotion(Vector3 $motion) : bool{
+		Utils::checkVector3NotInfOrNaN($motion);
+		if(!$this->justCreated){
+			$ev = new EntityMotionEvent($this, $motion);
+			$ev->call();
+			if($ev->isCancelled()){
+				return false;
+			}
+		}
+
+		$this->motion = clone $motion;
+
+		if(!$this->justCreated){
+			$this->updateMovement();
+		}
+
+		return true;
+	}
+
+	public function kill() : void{
+		if($this->isAlive()){
+			$this->health = 0;
+			$this->onDeath();
+			$this->scheduleUpdate();
+		}
+	}
+
+	public function isOnFire() : bool{
+		return $this->fireTicks > 0;
+	}
+
+	/**
+	 * @param null|Player[]                        $targets
+	 * @param MetadataProperty[]                   $data Properly formatted entity data, defaults to everything
+	 *
+	 * @phpstan-param array<int, MetadataProperty> $data
+	 */
+	public function sendData(?array $targets, ?array $data = null) : void{
+		$data = $data ?? $this->getAllNetworkData();
+		$callback = fn(EntityEventBroadcaster $broadcaster, array $recipients) => $broadcaster->syncActorData($recipients, $this, $data);
+		if(null === $targets){
+			NetworkBroadcastUtils::broadcastEntityEventToSession($this->hasSpawnedSessions, $callback);
+		}else{
+			NetworkBroadcastUtils::broadcastEntityEvent($targets, $callback);
+		}
+	}
+
+	public function attack(EntityDamageEvent $source) : void{
+		if($this->isFireProof() && (
+				EntityDamageEvent::CAUSE_FIRE === $source->getCause()
+				|| EntityDamageEvent::CAUSE_FIRE_TICK === $source->getCause()
+				|| EntityDamageEvent::CAUSE_LAVA === $source->getCause()
+			)
+		){
+			$source->cancel();
+		}
+		$source->call();
+		if($source->isCancelled()){
+			return;
+		}
+
+		$this->setLastDamageCause($source);
+
+		$this->setHealth($this->getHealth() - $source->getFinalDamage());
+	}
+
+	public function isFireProof() : bool{
+		return false;
+	}
+
+	public function extinguish() : void{
+		$this->fireTicks = 0;
+		$this->networkPropertiesDirty = true;
+	}
+
+	public function onNearbyBlockChange() : void{
+		$this->setForceMovementUpdate();
+		$this->scheduleUpdate();
+	}
+
+	/**
+	 * Flags the entity as needing a movement update on the next tick. Setting this forces a movement update even if the
+	 * entity's motion is zero. Used to trigger movement updates when blocks change near entities.
+	 */
+	final public function setForceMovementUpdate(bool $value = true) : void{
+		$this->forceMovementUpdate = $value;
+
+		$this->blocksAround = null;
+	}
+
+	/**
+	 * Called when a random update is performed on the chunk the entity is in. This happens when the chunk is within the
+	 * ticking chunk range of a player (or chunk loader).
+	 */
+	public function onRandomUpdate() : void{
+		$this->scheduleUpdate();
+	}
+
+	public function getFallDistance() : float{
+		return $this->fallDistance;
+	}
+
+	public function setFallDistance(float $fallDistance) : void{
+		$this->fallDistance = $fallDistance;
+	}
+
+	public function getEyePos() : Vector3{
+		return new Vector3($this->location->x, $this->location->y + $this->getEyeHeight(), $this->location->z);
+	}
+
+	public function getEyeHeight() : float{
+		return $this->size->getEyeHeight();
+	}
+
+	public function onCollideWithPlayer(Player $player) : void{ }
+
+	/**
+	 * Called when interacted or tapped by a Player. Returns whether something happened as a result of the interaction.
+	 */
+	public function onInteract(Player $player, Vector3 $clickPos) : bool{
+		return false;
+	}
+
+	public function isUnderwater() : bool{
+		$block = $this->getWorld()->getBlockAt((int) floor($this->location->x), $blockY = (int) floor($y = ($this->location->y + $this->getEyeHeight())), (int) floor($this->location->z));
+
+		if($block instanceof Water){
+			$f = ($blockY + 1) - ($block->getFluidHeightPercent() - 0.1111111);
+
+			return $y < $f;
+		}
+
+		return false;
+	}
+
+	public function isInsideOfSolid() : bool{
+		$block = $this->getWorld()->getBlockAt((int) floor($this->location->x), (int) floor($y = ($this->location->y + $this->getEyeHeight())), (int) floor($this->location->z));
+
+		return $block->isSolid() && !$block->isTransparent() && $block->collidesWithBB($this->getBoundingBox());
+	}
+
+	public function getBoundingBox() : AxisAlignedBB{
+		return $this->boundingBox;
+	}
+
+	/**
+	 * Returns whether this entity can be moved by currents in liquids.
+	 */
+	public function canBeMovedByCurrents() : bool{
+		return true;
+	}
+
+	public function getPosition() : Position{
+		return $this->location->asPosition();
+	}
+
+	public function getLocation() : Location{
+		return $this->location->asLocation();
+	}
+
+	/**
+	 * Adds the given values to the entity's motion vector.
+	 */
+	public function addMotion(float $x, float $y, float $z) : void{
+		Utils::checkFloatNotInfOrNaN('x', $x);
+		Utils::checkFloatNotInfOrNaN('y', $y);
+		Utils::checkFloatNotInfOrNaN('z', $z);
+		$this->motion = $this->motion->add($x, $y, $z);
+	}
+
+	public function isOnGround() : bool{
+		return $this->onGround;
+	}
+
+	/**
+	 * @param Location|Position|Vector3 $pos
+	 */
+	public function teleport(Vector3 $pos, ?float $yaw = null, ?float $pitch = null) : bool{
+		Utils::checkVector3NotInfOrNaN($pos);
+		if($pos instanceof Location){
+			$yaw = $yaw ?? $pos->yaw;
+			$pitch = $pitch ?? $pos->pitch;
+		}
+		if(null !== $yaw){
+			Utils::checkFloatNotInfOrNaN('yaw', $yaw);
+		}
+		if(null !== $pitch){
+			Utils::checkFloatNotInfOrNaN('pitch', $pitch);
+		}
+
+		$from = $this->location->asPosition();
+		$to = Position::fromObject($pos, $pos instanceof Position ? $pos->getWorld() : $this->getWorld());
+		$ev = new EntityTeleportEvent($this, $from, $to);
+		$ev->call();
+		if($ev->isCancelled()){
+			return false;
+		}
+		$this->ySize = 0;
+		$pos = $ev->getTo();
+
+		$this->setMotion(new Vector3(0, 0, 0));
+		if($this->setPositionAndRotation($pos, $yaw ?? $this->location->yaw, $pitch ?? $this->location->pitch)){
+			$this->resetFallDistance();
+			$this->setForceMovementUpdate();
+
+			$this->updateMovement(true);
+
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
+	 * @deprecated WARNING: This function DOES NOT permanently hide the entity from viewers. As soon as the entity or
+	 * player moves, viewers will once again be able to see the entity.
+	 */
+	public function despawnFromAll() : void{
+		NetworkBroadcastUtils::broadcastEntityEventToSession(
+			$this->hasSpawnedSessions,
+			fn(EntityEventBroadcaster $broadcaster, array $recipients) => $broadcaster->onEntityRemoved($recipients, $this)
+		);
+		$this->hasSpawned = [];
+		$this->hasSpawnedSessions = [];
+	}
+
+	public function setRotation(float $yaw, float $pitch) : void{
+		Utils::checkFloatNotInfOrNaN('yaw', $yaw);
+		Utils::checkFloatNotInfOrNaN('pitch', $pitch);
+		$this->location->yaw = $yaw;
+		$this->location->pitch = $pitch;
+		$this->cacheDirectionVector = null;
+		$this->cacheDirectionPlane = null;
+		$this->scheduleUpdate();
+	}
+
+	public function spawnToAll() : void{
+		if($this->closed){
+			return;
+		}
+		foreach($this->getWorld()->getViewersForPosition($this->location) as $player){
+			$this->spawnTo($player);
+		}
+	}
+
+	public function spawnTo(Player $player) : void{
+		$id = spl_object_id($player);
+		// TODO: this will cause some visible lag during chunk resends; if the player uses a spawn egg in a chunk, the
+		// created entity won't be visible until after the resend arrives. However, this is better than possibly crashing
+		// the player by sending them entities too early.
+		if(!isset($this->hasSpawned[$id]) && $player->getWorld() === $this->getWorld() && $player->hasReceivedChunk($this->location->getFloorX() >> Chunk::COORD_BIT_SIZE, $this->location->getFloorZ() >> Chunk::COORD_BIT_SIZE)){
+			$this->hasSpawned[$id] = $player;
+			$this->hasSpawnedSessions[$id] = $player->getNetworkSession();
+
+			$this->sendSpawnPacket($player);
+		}
+	}
+
+	abstract public static function getNetworkTypeId() : string;
+
+	public function respawnToAll() : void{
+		foreach($this->hasSpawned as $key => $player){
+			unset($this->hasSpawned[$key], $this->hasSpawnedSessions[$key]);
+
+			$this->spawnTo($player);
+		}
+	}
+
+	/**
+	 * @deprecated WARNING: This function DOES NOT permanently hide the entity from the player. As soon as the entity or
+	 * player moves, the player will once again be able to see the entity.
+	 */
+	public function despawnFrom(Player $player, bool $send = true) : void{
+		$id = spl_object_id($player);
+		if(isset($this->hasSpawned[$id])){
+			if($send){
+				$player->getNetworkSession()->getEntityEventBroadcaster()->onEntityRemoved([$player->getNetworkSession()], $this);
+			}
+			unset($this->hasSpawned[$id], $this->hasSpawnedSessions[$id]);
+		}
+	}
+
+	/**
+	 * Returns the item that players will equip when middle-clicking on this entity.
+	 */
+	public function getPickedItem() : ?Item{
+		return null;
+	}
+
+	public function isFlaggedForDespawn() : bool{
+		return $this->needsDespawn;
+	}
+
+	/**
+	 * Returns whether the entity has been "closed".
+	 */
+	public function isClosed() : bool{
+		return $this->closed;
+	}
+
+	/**
+	 * @param null|Player[] $targets
+	 */
+	public function broadcastAnimation(Animation $animation, ?array $targets = null) : void{
+		NetworkBroadcastUtils::broadcastPackets($targets ?? $this->getViewers(), $animation->encode());
+	}
+
+	/**
+	 * @return Player[]
+	 */
+	public function getViewers() : array{
+		return $this->hasSpawned;
+	}
+
+	/**
+	 * Broadcasts a sound caused by the entity. If the entity is considered "silent", the sound will be dropped.
+	 *
+	 * @param null|Player[] $targets
+	 */
+	public function broadcastSound(Sound $sound, ?array $targets = null) : void{
+		if(!$this->silent){
+			$this->getWorld()->addSound($this->location->asVector3(), $sound, $targets ?? $this->getViewers());
+		}
+	}
+
+	/**
+	 * Closes the entity and frees attached references.
+	 *
+	 * WARNING: Entities are unusable after this has been executed!
+	 */
+	final public function close() : void{
+		if($this->closeInFlight){
+			return;
+		}
+
+		if(!$this->closed){
+			$this->closeInFlight = true;
+			(new EntityDespawnEvent($this))->call();
+
+			$this->onDispose();
+			$this->closed = true;
+			$this->destroyCycles();
+			$this->closeInFlight = false;
+		}
+	}
+
+	abstract protected function getInitialSizeInfo() : EntitySizeInfo;
+
+	/**
+	 * Returns the percentage by which the entity's velocity is reduced per tick when moving through air.
+	 * The entity's velocity is multiplied by 1 minus this value.
+	 *
+	 * @return float 0-1
+	 */
+	abstract protected function getInitialDragMultiplier() : float;
+
+	/**
+	 * Returns the downwards acceleration of the entity when falling, in blocks/tick².
+	 *
+	 * @return float minimum 0
+	 */
+	abstract protected function getInitialGravity() : float;
+
+	protected function recalculateBoundingBox() : void{
+		$halfWidth = $this->size->getWidth() / 2;
+
+		$this->boundingBox = new AxisAlignedBB(
+			$this->location->x - $halfWidth,
+			$this->location->y + $this->ySize,
+			$this->location->z - $halfWidth,
+			$this->location->x + $halfWidth,
+			$this->location->y + $this->size->getHeight() + $this->ySize,
+			$this->location->z + $halfWidth
+		);
+	}
+
+	protected function resetLastMovements() : void{
+		$this->lastLocation = $this->location->asLocation();
+		$this->lastMotion = clone $this->motion;
+	}
+
+	protected function addAttributes() : void{ }
+
+	protected function initEntity(CompoundTag $nbt) : void{
+		$this->fireTicks = $nbt->getShort(self::TAG_FIRE, 0);
+
+		$this->onGround = 0 !== $nbt->getByte(self::TAG_ON_GROUND, 0);
+
+		$this->fallDistance = $nbt->getFloat(self::TAG_FALL_DISTANCE, 0.0);
+
+		if(($customNameTag = $nbt->getTag(self::TAG_CUSTOM_NAME)) instanceof StringTag){
+			$this->setNameTag($customNameTag->getValue());
+
+			if(($customNameVisibleTag = $nbt->getTag(self::TAG_CUSTOM_NAME_VISIBLE)) instanceof StringTag){
+				// Older versions incorrectly saved this as a string (see 890f72dbf23a77f294169b79590770470041adc4)
+				$this->setNameTagVisible('' !== $customNameVisibleTag->getValue());
+			}else{
+				$this->setNameTagVisible(0 !== $nbt->getByte(self::TAG_CUSTOM_NAME_VISIBLE, 1));
+			}
+		}
+	}
+
+	protected function setSize(EntitySizeInfo $size) : void{
+		$this->size = $size;
+		$this->recalculateBoundingBox();
+		$this->networkPropertiesDirty = true;
 	}
 
 	/**
@@ -734,27 +1139,6 @@ abstract class Entity{
 	 */
 	protected function onDeathUpdate(int $tickDiff) : bool{
 		return true;
-	}
-
-	/**
-	 * Flags the entity to be removed from the world on the next tick.
-	 */
-	public function flagForDespawn() : void{
-		$this->needsDespawn = true;
-		$this->scheduleUpdate();
-	}
-
-	/**
-	 * Returns whether the entity needs a movement update on the next tick.
-	 */
-	public function hasMovementUpdate() : bool{
-		return (
-			$this->forceMovementUpdate ||
-			floatval($this->motion->x) !== 0.0 ||
-			floatval($this->motion->y) !== 0.0 ||
-			floatval($this->motion->z) !== 0.0 ||
-			!$this->onGround
-		);
 	}
 
 	protected function tryChangeMovement() : void{
@@ -802,7 +1186,7 @@ abstract class Entity{
 
 			$moveBB = clone $this->boundingBox;
 
-			assert(abs($dx) <= 20 && abs($dy) <= 20 && abs($dz) <= 20, "Movement distance is excessive: dx=$dx, dy=$dy, dz=$dz");
+			assert(abs($dx) <= 20 && abs($dy) <= 20 && abs($dz) <= 20, "Movement distance is excessive: dx={$dx}, dy={$dy}, dz={$dz}");
 
 			$list = $this->getWorld()->getBlockCollisionBoxes($moveBB->addCoord($dx, $dy, $dz));
 
@@ -895,7 +1279,7 @@ abstract class Entity{
 			$wantedZ !== $dz ? 0 : null
 		);
 
-		//TODO: vehicle collision events (first we need to spawn them!)
+		// TODO: vehicle collision events (first we need to spawn them!)
 
 		Timings::$entityMove->stopTiming();
 	}
@@ -909,19 +1293,21 @@ abstract class Entity{
 
 	protected function updateFallState(float $distanceThisTick, bool $onGround) : ?float{
 		if($distanceThisTick < $this->fallDistance){
-			//we've fallen some distance (distanceThisTick is negative)
-			//or we ascended back towards where fall distance was measured from initially (distanceThisTick is positive but less than existing fallDistance)
+			// we've fallen some distance (distanceThisTick is negative)
+			// or we ascended back towards where fall distance was measured from initially (distanceThisTick is positive but less than existing fallDistance)
 			$this->fallDistance -= $distanceThisTick;
 		}else{
-			//we ascended past the apex where fall distance was originally being measured from
-			//reset it so it will be measured starting from the new, higher position
+			// we ascended past the apex where fall distance was originally being measured from
+			// reset it so it will be measured starting from the new, higher position
 			$this->fallDistance = 0;
 		}
 		if($onGround && $this->fallDistance > 0){
 			$newVerticalVelocity = $this->onHitGround();
 			$this->resetFallDistance();
+
 			return $newVerticalVelocity;
 		}
+
 		return null;
 	}
 
@@ -932,20 +1318,16 @@ abstract class Entity{
 		return null;
 	}
 
-	public function resetFallDistance() : void{
-		$this->fallDistance = 0.0;
-	}
-
 	protected function updateMovement(bool $teleport = false) : void{
 		$diffPosition = $this->location->distanceSquared($this->lastLocation);
 		$diffRotation = ($this->location->yaw - $this->lastLocation->yaw) ** 2 + ($this->location->pitch - $this->lastLocation->pitch) ** 2;
 
 		$diffMotion = $this->motion->subtractVector($this->lastMotion)->lengthSquared();
 
-		$still = $this->motion->lengthSquared() === 0.0;
-		$wasStill = $this->lastMotion->lengthSquared() === 0.0;
+		$still = 0.0 === $this->motion->lengthSquared();
+		$wasStill = 0.0 === $this->lastMotion->lengthSquared();
 		if($wasStill !== $still){
-			//TODO: hack for client-side AI interference: prevent client sided movement when motion is 0
+			// TODO: hack for client-side AI interference: prevent client sided movement when motion is 0
 			$this->setNoClientPredictions($still);
 		}
 
@@ -955,24 +1337,11 @@ abstract class Entity{
 			$this->broadcastMovement($teleport);
 		}
 
-		if($diffMotion > 0.0025 || $wasStill !== $still){ //0.05 ** 2
+		if($diffMotion > 0.0025 || $wasStill !== $still){ // 0.05 ** 2
 			$this->lastMotion = clone $this->motion;
 
 			$this->broadcastMotion();
 		}
-	}
-
-	/**
-	 * Things such as movement in water, burning, etc. may be predicted by the client. This is sometimes not desirable,
-	 * since server-side logic may differ from client-side prediction. However, things like movement smoothing
-	 * (interpolation) are also controlled by this, so it should be used with care.
-	 *
-	 * Setting this flag will also disable player movement inputs, but this should not be relied on, as cheat clients
-	 * will be able to bypass it.
-	 */
-	public function setNoClientPredictions(bool $value = true) : void{
-		$this->noClientPredictions = $value;
-		$this->networkPropertiesDirty = true;
 	}
 
 	protected function broadcastMovement(bool $teleport = false) : void{
@@ -982,50 +1351,22 @@ abstract class Entity{
 			$this->location->pitch,
 			$this->location->yaw,
 			$this->location->yaw,
-			(
-				//TODO: We should be setting FLAG_TELEPORT here to disable client-side movement interpolation, but it
-				//breaks player teleporting (observers see the player rubberband back to the pre-teleport position while
-				//the teleported player sees themselves at the correct position), and does nothing whatsoever for
-				//non-player entities (movement is still interpolated). Both of these are client bugs.
-				//See https://github.com/pmmp/PocketMine-MP/issues/4394
-			($this->onGround ? MoveActorAbsolutePacket::FLAG_GROUND : 0)
-			)
-		)]);
-	}
 
-	public function getOffsetPosition(Vector3 $vector3) : Vector3{
-		return $vector3;
+			// TODO: We should be setting FLAG_TELEPORT here to disable client-side movement interpolation, but it
+			// breaks player teleporting (observers see the player rubberband back to the pre-teleport position while
+			// the teleported player sees themselves at the correct position), and does nothing whatsoever for
+			// non-player entities (movement is still interpolated). Both of these are client bugs.
+			// See https://github.com/pmmp/PocketMine-MP/issues/4394
+			$this->onGround ? MoveActorAbsolutePacket::FLAG_GROUND : 0
+		)]);
 	}
 
 	protected function broadcastMotion() : void{
 		NetworkBroadcastUtils::broadcastPackets($this->hasSpawned, [SetActorMotionPacket::create($this->id, $this->getMotion(), tick: 0)]);
 	}
 
-	public function getMotion() : Vector3{
-		return clone $this->motion;
-	}
-
-	public function setMotion(Vector3 $motion) : bool{
-		Utils::checkVector3NotInfOrNaN($motion);
-		if(!$this->justCreated){
-			$ev = new EntityMotionEvent($this, $motion);
-			$ev->call();
-			if($ev->isCancelled()){
-				return false;
-			}
-		}
-
-		$this->motion = clone $motion;
-
-		if(!$this->justCreated){
-			$this->updateMovement();
-		}
-
-		return true;
-	}
-
 	protected function entityBaseTick(int $tickDiff = 1) : bool{
-		//TODO: check vehicles
+		// TODO: check vehicles
 
 		if($this->justCreated){
 			$this->justCreated = false;
@@ -1064,23 +1405,14 @@ abstract class Entity{
 		return $hasUpdate;
 	}
 
-	public function kill() : void{
-		if($this->isAlive()){
-			$this->health = 0;
-			$this->onDeath();
-			$this->scheduleUpdate();
-		}
-	}
-
 	/**
 	 * Override this to do actions on death.
 	 */
-	protected function onDeath() : void{
-
-	}
+	protected function onDeath() : void{ }
 
 	/**
 	 * @return MetadataProperty[]
+	 *
 	 * @phpstan-return array<int, MetadataProperty>
 	 */
 	final protected function getDirtyNetworkData() : array{
@@ -1088,6 +1420,7 @@ abstract class Entity{
 			$this->syncNetworkData($this->networkProperties);
 			$this->networkPropertiesDirty = false;
 		}
+
 		return $this->networkProperties->getDirty();
 	}
 
@@ -1114,28 +1447,9 @@ abstract class Entity{
 		$properties->setGenericFlag(EntityMetadataFlags::WALLCLIMBING, $this->canClimbWalls);
 	}
 
-	public function isOnFire() : bool{
-		return $this->fireTicks > 0;
-	}
-
-	/**
-	 * @param Player[]|null                        $targets
-	 * @param MetadataProperty[]                   $data Properly formatted entity data, defaults to everything
-	 *
-	 * @phpstan-param array<int, MetadataProperty> $data
-	 */
-	public function sendData(?array $targets, ?array $data = null) : void{
-		$data = $data ?? $this->getAllNetworkData();
-		$callback = fn(EntityEventBroadcaster $broadcaster, array $recipients) => $broadcaster->syncActorData($recipients, $this, $data);
-		if($targets === null){
-			NetworkBroadcastUtils::broadcastEntityEventToSession($this->hasSpawnedSessions, $callback);
-		}else{
-			NetworkBroadcastUtils::broadcastEntityEvent($targets, $callback);
-		}
-	}
-
 	/**
 	 * @return MetadataProperty[]
+	 *
 	 * @phpstan-return array<int, MetadataProperty>
 	 */
 	final protected function getAllNetworkData() : array{
@@ -1143,41 +1457,20 @@ abstract class Entity{
 			$this->syncNetworkData($this->networkProperties);
 			$this->networkPropertiesDirty = false;
 		}
+
 		return $this->networkProperties->getAll();
-	}
-
-	public function attack(EntityDamageEvent $source) : void{
-		if($this->isFireProof() && (
-				$source->getCause() === EntityDamageEvent::CAUSE_FIRE ||
-				$source->getCause() === EntityDamageEvent::CAUSE_FIRE_TICK ||
-				$source->getCause() === EntityDamageEvent::CAUSE_LAVA
-			)
-		){
-			$source->cancel();
-		}
-		$source->call();
-		if($source->isCancelled()){
-			return;
-		}
-
-		$this->setLastDamageCause($source);
-
-		$this->setHealth($this->getHealth() - $source->getFinalDamage());
-	}
-
-	public function isFireProof() : bool{
-		return false;
 	}
 
 	protected function doOnFireTick(int $tickDiff = 1) : bool{
 		if($this->isFireProof() && $this->isOnFire()){
 			$this->extinguish();
+
 			return false;
 		}
 
 		$this->fireTicks -= $tickDiff;
 
-		if(($this->fireTicks % 20 === 0) || $tickDiff > 20){
+		if((0 === $this->fireTicks % 20) || $tickDiff > 20){
 			$this->dealFireDamage();
 		}
 
@@ -1190,154 +1483,12 @@ abstract class Entity{
 		return false;
 	}
 
-	public function extinguish() : void{
-		$this->fireTicks = 0;
-		$this->networkPropertiesDirty = true;
-	}
-
 	/**
 	 * Called to deal damage to entities when they are on fire.
 	 */
 	protected function dealFireDamage() : void{
 		$ev = new EntityDamageEvent($this, EntityDamageEvent::CAUSE_FIRE_TICK, 1);
 		$this->attack($ev);
-	}
-
-	public function onNearbyBlockChange() : void{
-		$this->setForceMovementUpdate();
-		$this->scheduleUpdate();
-	}
-
-	/**
-	 * Flags the entity as needing a movement update on the next tick. Setting this forces a movement update even if the
-	 * entity's motion is zero. Used to trigger movement updates when blocks change near entities.
-	 */
-	final public function setForceMovementUpdate(bool $value = true) : void{
-		$this->forceMovementUpdate = $value;
-
-		$this->blocksAround = null;
-	}
-
-	/**
-	 * Called when a random update is performed on the chunk the entity is in. This happens when the chunk is within the
-	 * ticking chunk range of a player (or chunk loader).
-	 */
-	public function onRandomUpdate() : void{
-		$this->scheduleUpdate();
-	}
-
-	public function getFallDistance() : float{ return $this->fallDistance; }
-
-	public function setFallDistance(float $fallDistance) : void{
-		$this->fallDistance = $fallDistance;
-	}
-
-	public function getEyePos() : Vector3{
-		return new Vector3($this->location->x, $this->location->y + $this->getEyeHeight(), $this->location->z);
-	}
-
-	public function getEyeHeight() : float{
-		return $this->size->getEyeHeight();
-	}
-
-	public function onCollideWithPlayer(Player $player) : void{
-
-	}
-
-	/**
-	 * Called when interacted or tapped by a Player. Returns whether something happened as a result of the interaction.
-	 */
-	public function onInteract(Player $player, Vector3 $clickPos) : bool{
-		return false;
-	}
-
-	public function isUnderwater() : bool{
-		$block = $this->getWorld()->getBlockAt((int) floor($this->location->x), $blockY = (int) floor($y = ($this->location->y + $this->getEyeHeight())), (int) floor($this->location->z));
-
-		if($block instanceof Water){
-			$f = ($blockY + 1) - ($block->getFluidHeightPercent() - 0.1111111);
-			return $y < $f;
-		}
-
-		return false;
-	}
-
-	public function isInsideOfSolid() : bool{
-		$block = $this->getWorld()->getBlockAt((int) floor($this->location->x), (int) floor($y = ($this->location->y + $this->getEyeHeight())), (int) floor($this->location->z));
-
-		return $block->isSolid() && !$block->isTransparent() && $block->collidesWithBB($this->getBoundingBox());
-	}
-
-	public function getBoundingBox() : AxisAlignedBB{
-		return $this->boundingBox;
-	}
-
-	/**
-	 * Returns whether this entity can be moved by currents in liquids.
-	 */
-	public function canBeMovedByCurrents() : bool{
-		return true;
-	}
-
-	public function getPosition() : Position{
-		return $this->location->asPosition();
-	}
-
-	public function getLocation() : Location{
-		return $this->location->asLocation();
-	}
-
-	/**
-	 * Adds the given values to the entity's motion vector.
-	 */
-	public function addMotion(float $x, float $y, float $z) : void{
-		Utils::checkFloatNotInfOrNaN("x", $x);
-		Utils::checkFloatNotInfOrNaN("y", $y);
-		Utils::checkFloatNotInfOrNaN("z", $z);
-		$this->motion = $this->motion->add($x, $y, $z);
-	}
-
-	public function isOnGround() : bool{
-		return $this->onGround;
-	}
-
-	/**
-	 * @param Vector3|Position|Location $pos
-	 */
-	public function teleport(Vector3 $pos, ?float $yaw = null, ?float $pitch = null) : bool{
-		Utils::checkVector3NotInfOrNaN($pos);
-		if($pos instanceof Location){
-			$yaw = $yaw ?? $pos->yaw;
-			$pitch = $pitch ?? $pos->pitch;
-		}
-		if($yaw !== null){
-			Utils::checkFloatNotInfOrNaN("yaw", $yaw);
-		}
-		if($pitch !== null){
-			Utils::checkFloatNotInfOrNaN("pitch", $pitch);
-		}
-
-		$from = $this->location->asPosition();
-		$to = Position::fromObject($pos, $pos instanceof Position ? $pos->getWorld() : $this->getWorld());
-		$ev = new EntityTeleportEvent($this, $from, $to);
-		$ev->call();
-		if($ev->isCancelled()){
-			return false;
-		}
-		$this->ySize = 0;
-		$pos = $ev->getTo();
-
-		$this->setMotion(new Vector3(0, 0, 0));
-		if($this->setPositionAndRotation($pos, $yaw ?? $this->location->yaw, $pitch ?? $this->location->pitch)){
-			$this->resetFallDistance();
-			$this->setForceMovementUpdate();
-
-			$this->updateMovement(true);
-
-			return true;
-		}
-
-		return false;
 	}
 
 	protected function setPositionAndRotation(Vector3 $pos, float $yaw, float $pitch) : bool{
@@ -1383,162 +1534,26 @@ abstract class Entity{
 	}
 
 	/**
-	 * @deprecated WARNING: This function DOES NOT permanently hide the entity from viewers. As soon as the entity or
-	 * player moves, viewers will once again be able to see the entity.
-	 */
-	public function despawnFromAll() : void{
-		NetworkBroadcastUtils::broadcastEntityEventToSession(
-			$this->hasSpawnedSessions,
-			fn(EntityEventBroadcaster $broadcaster, array $recipients) => $broadcaster->onEntityRemoved($recipients, $this)
-		);
-		$this->hasSpawned = [];
-		$this->hasSpawnedSessions = [];
-	}
-
-	public function setRotation(float $yaw, float $pitch) : void{
-		Utils::checkFloatNotInfOrNaN("yaw", $yaw);
-		Utils::checkFloatNotInfOrNaN("pitch", $pitch);
-		$this->location->yaw = $yaw;
-		$this->location->pitch = $pitch;
-		$this->scheduleUpdate();
-	}
-
-	public function spawnToAll() : void{
-		if($this->closed){
-			return;
-		}
-		foreach($this->getWorld()->getViewersForPosition($this->location) as $player){
-			$this->spawnTo($player);
-		}
-	}
-
-	public function spawnTo(Player $player) : void{
-		$id = spl_object_id($player);
-		//TODO: this will cause some visible lag during chunk resends; if the player uses a spawn egg in a chunk, the
-		//created entity won't be visible until after the resend arrives. However, this is better than possibly crashing
-		//the player by sending them entities too early.
-		if(!isset($this->hasSpawned[$id]) && $player->getWorld() === $this->getWorld() && $player->hasReceivedChunk($this->location->getFloorX() >> Chunk::COORD_BIT_SIZE, $this->location->getFloorZ() >> Chunk::COORD_BIT_SIZE)){
-			$this->hasSpawned[$id] = $player;
-			$this->hasSpawnedSessions[$id] = $player->getNetworkSession();
-
-			$this->sendSpawnPacket($player);
-		}
-	}
-
-	/**
 	 * Called by spawnTo() to send whatever packets needed to spawn the entity to the client.
 	 */
 	protected function sendSpawnPacket(Player $player) : void{
 		$player->getNetworkSession()->sendDataPacket(AddActorPacket::create(
-			$this->getId(), //TODO: actor unique ID
+			$this->getId(), // TODO: actor unique ID
 			$this->getId(),
 			static::getNetworkTypeId(),
 			$this->location->asVector3(),
 			$this->getMotion(),
 			$this->location->pitch,
 			$this->location->yaw,
-			$this->location->yaw, //TODO: head yaw
-			$this->location->yaw, //TODO: body yaw (wtf mojang?)
+			$this->location->yaw, // TODO: head yaw
+			$this->location->yaw, // TODO: body yaw (wtf mojang?)
 			array_map(function(Attribute $attr) : NetworkAttribute{
 				return new NetworkAttribute($attr->getId(), $attr->getMinValue(), $attr->getMaxValue(), $attr->getValue(), $attr->getDefaultValue(), []);
 			}, $this->attributeMap->getAll()),
 			$this->getAllNetworkData(),
 			new PropertySyncData([], []),
-			[] //TODO: entity links
+			[] // TODO: entity links
 		));
-	}
-
-	abstract public static function getNetworkTypeId() : string;
-
-	public function respawnToAll() : void{
-		foreach($this->hasSpawned as $key => $player){
-			unset($this->hasSpawned[$key]);
-			unset($this->hasSpawnedSessions[$key]);
-			$this->spawnTo($player);
-		}
-	}
-
-	/**
-	 * @deprecated WARNING: This function DOES NOT permanently hide the entity from the player. As soon as the entity or
-	 * player moves, the player will once again be able to see the entity.
-	 */
-	public function despawnFrom(Player $player, bool $send = true) : void{
-		$id = spl_object_id($player);
-		if(isset($this->hasSpawned[$id])){
-			if($send){
-				$player->getNetworkSession()->getEntityEventBroadcaster()->onEntityRemoved([$player->getNetworkSession()], $this);
-			}
-			unset($this->hasSpawned[$id]);
-			unset($this->hasSpawnedSessions[$id]);
-		}
-	}
-
-	/**
-	 * Returns the item that players will equip when middle-clicking on this entity.
-	 */
-	public function getPickedItem() : ?Item{
-		return null;
-	}
-
-	public function isFlaggedForDespawn() : bool{
-		return $this->needsDespawn;
-	}
-
-	/**
-	 * Returns whether the entity has been "closed".
-	 */
-	public function isClosed() : bool{
-		return $this->closed;
-	}
-
-	/**
-	 * @param Player[]|null $targets
-	 */
-	public function broadcastAnimation(Animation $animation, ?array $targets = null) : void{
-		NetworkBroadcastUtils::broadcastPackets($targets ?? $this->getViewers(), $animation->encode());
-	}
-
-	/**
-	 * @return Player[]
-	 */
-	public function getViewers() : array{
-		return $this->hasSpawned;
-	}
-
-	/**
-	 * Broadcasts a sound caused by the entity. If the entity is considered "silent", the sound will be dropped.
-	 *
-	 * @param Player[]|null $targets
-	 */
-	public function broadcastSound(Sound $sound, ?array $targets = null) : void{
-		if(!$this->silent){
-			$this->getWorld()->addSound($this->location->asVector3(), $sound, $targets ?? $this->getViewers());
-		}
-	}
-
-	public function __destruct(){
-		$this->close();
-	}
-
-	/**
-	 * Closes the entity and frees attached references.
-	 *
-	 * WARNING: Entities are unusable after this has been executed!
-	 */
-	final public function close() : void{
-		if($this->closeInFlight){
-			return;
-		}
-
-		if(!$this->closed){
-			$this->closeInFlight = true;
-			(new EntityDespawnEvent($this))->call();
-
-			$this->onDispose();
-			$this->closed = true;
-			$this->destroyCycles();
-			$this->closeInFlight = false;
-		}
 	}
 
 	/**
@@ -1562,13 +1577,9 @@ abstract class Entity{
 		$this->lastDamageCause = null;
 	}
 
-	public function __toString(){
-		return (new ReflectionClass($this))->getShortName() . "(" . $this->getId() . ")";
-	}
-
 	protected function checkObstruction(float $x, float $y, float $z) : bool{
 		$world = $this->getWorld();
-		if(count($world->getBlockCollisionBoxes($this->boundingBox)) === 0){
+		if(0 === count($world->getBlockCollisionBoxes($this->boundingBox))){
 			return false;
 		}
 
@@ -1620,7 +1631,7 @@ abstract class Entity{
 				$direction = Facing::SOUTH;
 			}
 
-			if($direction === -1){
+			if(-1 === $direction){
 				return false;
 			}
 
@@ -1634,6 +1645,7 @@ abstract class Entity{
 				Facing::NORTH => $this->motion->withComponents(null, null, -$force),
 				Facing::SOUTH => $this->motion->withComponents(null, null, $force),
 			};
+
 			return true;
 		}
 
@@ -1644,10 +1656,10 @@ abstract class Entity{
 	 * @return Block[]
 	 */
 	protected function getBlocksAroundWithEntityInsideActions() : array{
-		if($this->blocksAround === null){
+		if(null === $this->blocksAround){
 			$this->blocksAround = [];
 
-			$inset = 0.001; //Offset against floating-point errors
+			$inset = 0.001; // Offset against floating-point errors
 			foreach($this->getBlocksIntersected($inset) as $block){
 				if($block->hasEntityCollision()){
 					$this->blocksAround[] = $block;

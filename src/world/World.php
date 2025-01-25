@@ -24,6 +24,7 @@ declare(strict_types=1);
 /**
  * All World related classes are here, like Generators, Populators, Noise, ...
  */
+
 namespace pocketmine\world;
 
 use pocketmine\block\Air;
@@ -360,7 +361,7 @@ class World implements ChunkManager{
 
 	private bool $doingTick = false;
 
-	/** @phpstan-var class-string<\pocketmine\world\generator\Generator> */
+	/** @phpstan-var class-string<generator\Generator> */
 	private string $generator;
 
 	private bool $unloaded = false;
@@ -408,8 +409,8 @@ class World implements ChunkManager{
 		return morton3d_encode(
 			$x & self::BLOCKHASH_XZ_MASK,
 			($shiftedY /* & self::BLOCKHASH_Y_MASK */) |
-				((($x >> self::MORTON3D_BIT_SIZE) & self::BLOCKHASH_XZ_EXTRA_MASK) << self::BLOCKHASH_X_SHIFT) |
-				((($z >> self::MORTON3D_BIT_SIZE) & self::BLOCKHASH_XZ_EXTRA_MASK) << self::BLOCKHASH_Z_SHIFT),
+			((($x >> self::MORTON3D_BIT_SIZE) & self::BLOCKHASH_XZ_EXTRA_MASK) << self::BLOCKHASH_X_SHIFT) |
+			((($z >> self::MORTON3D_BIT_SIZE) & self::BLOCKHASH_XZ_EXTRA_MASK) << self::BLOCKHASH_Z_SHIFT),
 			$z & self::BLOCKHASH_XZ_MASK
 		);
 	}
@@ -762,13 +763,12 @@ class World implements ChunkManager{
 	}
 
 	/**
+	 * @return Player[] spl_object_id => Player
+	 * @phpstan-return array<int, Player>
 	 * @deprecated WARNING: This function has a misleading name. Contrary to what the name might imply, this function
 	 * DOES NOT return players who are IN a chunk, rather, it returns players who can SEE the chunk.
 	 *
 	 * Returns a list of players who have the target chunk within their view distance.
-	 *
-	 * @return Player[] spl_object_id => Player
-	 * @phpstan-return array<int, Player>
 	 */
 	public function getChunkPlayers(int $chunkX, int $chunkZ) : array{
 		return $this->playerChunkListeners[World::chunkHash($chunkX, $chunkZ)] ?? [];
@@ -1286,9 +1286,9 @@ class World implements ChunkManager{
 	}
 
 	/**
-	 * @param bool[] &$cache
+	 * @param bool[] &                     $cache
 	 *
-	 * @phpstan-param array<int, bool> $cache
+	 * @phpstan-param array<int, bool>     $cache
 	 * @phpstan-param-out array<int, bool> $cache
 	 */
 	private function isChunkTickable(int $chunkX, int $chunkZ, array &$cache) : bool{
@@ -1615,11 +1615,10 @@ class World implements ChunkManager{
 	}
 
 	/**
-	 * @deprecated Use {@link World::getBlockCollisionBoxes()} instead (alongside {@link World::getCollidingEntities()}
-	 * if entity collision boxes are also required).
-	 *
 	 * @return AxisAlignedBB[]
 	 * @phpstan-return list<AxisAlignedBB>
+	 * @deprecated Use {@link World::getBlockCollisionBoxes()} instead (alongside {@link World::getCollidingEntities()}
+	 * if entity collision boxes are also required).
 	 */
 	public function getCollisionBoxes(Entity $entity, AxisAlignedBB $bb, bool $entities = true) : array{
 		$collides = $this->getBlockCollisionBoxes($bb);
@@ -2058,8 +2057,9 @@ class World implements ChunkManager{
 	 * Tries to break a block using a item, including Player time checks if available
 	 * It'll try to lower the durability if Item is a tool, and set it to Air if broken.
 	 *
-	 * @param Item   &$item          reference parameter (if null, can break anything)
-	 * @param Item[] &$returnedItems Items to be added to the target's inventory (or dropped, if the inventory is full)
+	 * @param Item   &         $item reference parameter (if null, can break anything)
+	 * @param Item[] &         $returnedItems Items to be added to the target's inventory (or dropped, if the inventory is full)
+	 *
 	 * @phpstan-param-out Item $item
 	 */
 	public function useBreakOn(Vector3 $vector, ?Item &$item = null, ?Player $player = null, bool $createParticles = false, array &$returnedItems = []) : bool{
@@ -2375,6 +2375,7 @@ class World implements ChunkManager{
 	 * @param string $entityType  Class of entity to use for instanceof
 	 * @param bool   $includeDead Whether to include entitites which are dead
 	 * @phpstan-template TEntity of Entity
+	 *
 	 * @phpstan-param class-string<TEntity> $entityType
 	 *
 	 * @return Entity|null an entity of type $entityType, or null if not found
@@ -2787,8 +2788,8 @@ class World implements ChunkManager{
 	}
 
 	/**
-	 * @internal Tiles are now bound with blocks, and their creation is automatic. They should not be directly added.
 	 * @throws \InvalidArgumentException
+	 * @internal Tiles are now bound with blocks, and their creation is automatic. They should not be directly added.
 	 */
 	public function addTile(Tile $tile) : void{
 		if($tile->isClosed()){
@@ -2816,8 +2817,8 @@ class World implements ChunkManager{
 	}
 
 	/**
-	 * @internal Tiles are now bound with blocks, and their removal is automatic. They should not be directly removed.
 	 * @throws \InvalidArgumentException
+	 * @internal Tiles are now bound with blocks, and their removal is automatic. They should not be directly removed.
 	 */
 	public function removeTile(Tile $tile) : void{
 		$pos = $tile->getPosition();
@@ -3257,11 +3258,12 @@ class World implements ChunkManager{
 		/** @phpstan-var PromiseResolver<Chunk> $resolver */
 		$resolver = $this->chunkPopulationRequestMap[$chunkHash] = new PromiseResolver();
 		if($associatedChunkLoader === null){
-			$temporaryLoader = new class implements ChunkLoader{};
+			$temporaryLoader = new class implements ChunkLoader{
+			};
 			$this->registerChunkLoader($temporaryLoader, $chunkX, $chunkZ);
 			$resolver->getPromise()->onCompletion(
 				fn() => $this->unregisterChunkLoader($temporaryLoader, $chunkX, $chunkZ),
-				static function() : void{}
+				static function() : void{ }
 			);
 		}
 		return $resolver->getPromise();
@@ -3304,7 +3306,8 @@ class World implements ChunkManager{
 			return [$resolver, false];
 		}
 
-		$temporaryChunkLoader = new class implements ChunkLoader{};
+		$temporaryChunkLoader = new class implements ChunkLoader{
+		};
 		$this->registerChunkLoader($temporaryChunkLoader, $chunkX, $chunkZ);
 		$chunk = $this->loadChunk($chunkX, $chunkZ);
 		$this->unregisterChunkLoader($temporaryChunkLoader, $chunkX, $chunkZ);
@@ -3432,6 +3435,7 @@ class World implements ChunkManager{
 
 	/**
 	 * @param Chunk[] $adjacentChunks chunkHash => chunk
+	 *
 	 * @phpstan-param array<int, Chunk> $adjacentChunks
 	 */
 	private function generateChunkCallback(ChunkLockId $chunkLockId, int $x, int $z, Chunk $chunk, array $adjacentChunks, ChunkLoader $temporaryChunkLoader) : void{

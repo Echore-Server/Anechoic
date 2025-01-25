@@ -68,33 +68,6 @@ abstract class Projectile extends Entity{
 		}
 	}
 
-	public function attack(EntityDamageEvent $source) : void{
-		if($source->getCause() === EntityDamageEvent::CAUSE_VOID){
-			parent::attack($source);
-		}
-	}
-
-	protected function initEntity(CompoundTag $nbt) : void{
-		parent::initEntity($nbt);
-
-		$this->setMaxHealth(1);
-		$this->setHealth(1);
-		$this->damage = $nbt->getDouble(self::TAG_DAMAGE, $this->damage);
-
-		if(($stuckOnBlockPosTag = $nbt->getListTag(self::TAG_STUCK_ON_BLOCK_POS)) !== null){
-			if($stuckOnBlockPosTag->getTagType() !== NBT::TAG_Int || count($stuckOnBlockPosTag) !== 3){
-				throw new SavedDataLoadingException(self::TAG_STUCK_ON_BLOCK_POS . " tag should be a list of 3 TAG_Int");
-			}
-
-			/** @var IntTag[] $values */
-			$values = $stuckOnBlockPosTag->getValue();
-
-			$this->blockHit = new Vector3($values[0]->getValue(), $values[1]->getValue(), $values[2]->getValue());
-		}elseif(($tileXTag = $nbt->getTag(self::TAG_TILE_X)) instanceof IntTag && ($tileYTag = $nbt->getTag(self::TAG_TILE_Y)) instanceof IntTag && ($tileZTag = $nbt->getTag(self::TAG_TILE_Z)) instanceof IntTag){
-			$this->blockHit = new Vector3($tileXTag->getValue(), $tileYTag->getValue(), $tileZTag->getValue());
-		}
-	}
-
 	public function canCollideWith(Entity $entity) : bool{
 		return ($entity instanceof Living || $entity instanceof EndCrystal) && !$this->onGround;
 	}
@@ -118,13 +91,6 @@ abstract class Projectile extends Entity{
 		$this->damage = $damage;
 	}
 
-	/**
-	 * Returns the amount of damage this projectile will deal to the entity it hits.
-	 */
-	public function getResultDamage() : int{
-		return (int) ceil($this->damage);
-	}
-
 	public function saveNBT() : CompoundTag{
 		$nbt = parent::saveNBT();
 
@@ -141,10 +107,6 @@ abstract class Projectile extends Entity{
 		return $nbt;
 	}
 
-	protected function applyDragBeforeGravity() : bool{
-		return true;
-	}
-
 	public function onNearbyBlockChange() : void{
 		if($this->blockHit !== null && $this->getWorld()->isInLoadedTerrain($this->blockHit)){
 			$blockHit = $this->getWorld()->getBlock($this->blockHit);
@@ -158,6 +120,31 @@ abstract class Projectile extends Entity{
 
 	public function hasMovementUpdate() : bool{
 		return $this->blockHit === null && parent::hasMovementUpdate();
+	}
+
+	protected function initEntity(CompoundTag $nbt) : void{
+		parent::initEntity($nbt);
+
+		$this->setMaxHealth(1);
+		$this->setHealth(1);
+		$this->damage = $nbt->getDouble(self::TAG_DAMAGE, $this->damage);
+
+		if(($stuckOnBlockPosTag = $nbt->getListTag(self::TAG_STUCK_ON_BLOCK_POS)) !== null){
+			if($stuckOnBlockPosTag->getTagType() !== NBT::TAG_Int || count($stuckOnBlockPosTag) !== 3){
+				throw new SavedDataLoadingException(self::TAG_STUCK_ON_BLOCK_POS . " tag should be a list of 3 TAG_Int");
+			}
+
+			/** @var IntTag[] $values */
+			$values = $stuckOnBlockPosTag->getValue();
+
+			$this->blockHit = new Vector3($values[0]->getValue(), $values[1]->getValue(), $values[2]->getValue());
+		}elseif(($tileXTag = $nbt->getTag(self::TAG_TILE_X)) instanceof IntTag && ($tileYTag = $nbt->getTag(self::TAG_TILE_Y)) instanceof IntTag && ($tileZTag = $nbt->getTag(self::TAG_TILE_Z)) instanceof IntTag){
+			$this->blockHit = new Vector3($tileXTag->getValue(), $tileYTag->getValue(), $tileZTag->getValue());
+		}
+	}
+
+	protected function applyDragBeforeGravity() : bool{
+		return true;
 	}
 
 	protected function move(float $dx, float $dy, float $dz) : void{
@@ -262,14 +249,6 @@ abstract class Projectile extends Entity{
 	}
 
 	/**
-	 * Called when the projectile hits something. Override this to perform non-target-specific effects when the
-	 * projectile hits something.
-	 */
-	protected function onHit(ProjectileHitEvent $event) : void{
-
-	}
-
-	/**
 	 * Called when the projectile collides with an Entity.
 	 */
 	protected function onHitEntity(Entity $entityHit, RayTraceResult $hitResult) : void{
@@ -298,10 +277,31 @@ abstract class Projectile extends Entity{
 	}
 
 	/**
+	 * Returns the amount of damage this projectile will deal to the entity it hits.
+	 */
+	public function getResultDamage() : int{
+		return (int) ceil($this->damage);
+	}
+
+	public function attack(EntityDamageEvent $source) : void{
+		if($source->getCause() === EntityDamageEvent::CAUSE_VOID){
+			parent::attack($source);
+		}
+	}
+
+	/**
 	 * Called when the projectile collides with a Block.
 	 */
 	protected function onHitBlock(Block $blockHit, RayTraceResult $hitResult) : void{
 		$this->blockHit = $blockHit->getPosition()->asVector3();
 		$blockHit->onProjectileHit($this, $hitResult);
+	}
+
+	/**
+	 * Called when the projectile hits something. Override this to perform non-target-specific effects when the
+	 * projectile hits something.
+	 */
+	protected function onHit(ProjectileHitEvent $event) : void{
+
 	}
 }

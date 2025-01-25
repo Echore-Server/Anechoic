@@ -37,7 +37,8 @@ use function strlen;
 final class StandardPacketBroadcaster implements PacketBroadcaster{
 	public function __construct(
 		private Server $server
-	){}
+	){
+	}
 
 	public function broadcastPackets(array $recipients, array $packets) : void{
 		//TODO: this shouldn't really be called here, since the broadcaster might be replaced by an alternative

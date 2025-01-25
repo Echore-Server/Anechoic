@@ -33,7 +33,9 @@ use pocketmine\player\Player;
 use pocketmine\Server;
 use pocketmine\timings\Timings;
 use pocketmine\utils\BinaryStream;
+use function log;
 use function spl_object_id;
+use function strlen;
 
 final class NetworkBroadcastUtils{
 
@@ -60,7 +62,6 @@ final class NetworkBroadcastUtils{
 			}
 			$packets = $ev->getPackets();
 		}
-
 
 		$compressor = ZlibCompressor::getInstance(); // pmmp hardcode gaming
 
@@ -124,7 +125,6 @@ final class NetworkBroadcastUtils{
 			$packets = $ev->getPackets();
 		}
 
-
 		$compressor = ZlibCompressor::getInstance(); // pmmp hardcode gaming
 
 		$totalLength = 0;
@@ -164,7 +164,7 @@ final class NetworkBroadcastUtils{
 	}
 
 	/**
-	 * @param Player[]                                                                   $recipients
+	 * @param Player[] $recipients
 	 *
 	 * @phpstan-param Closure(EntityEventBroadcaster, array<int, NetworkSession>) : void $callback
 	 */
@@ -184,9 +184,8 @@ final class NetworkBroadcastUtils{
 		}
 	}
 
-
 	/**
-	 * @param NetworkSession[]                                                           $recipients
+	 * @param NetworkSession[] $recipients
 	 *
 	 * @phpstan-param Closure(EntityEventBroadcaster, array<int, NetworkSession>) : void $callback
 	 */
