@@ -29,7 +29,7 @@ use const M_PI;
 class MathHelper{
 
 	const TABLE_N = 0xffff;
-	const RAD_DEG = 180 / M_PI;
+	const RAD_DEG = M_PI / 180;
 	/** @var float[] */
 	private static ?array $table = null;
 
@@ -39,7 +39,7 @@ class MathHelper{
 	}
 
 	public static function initTable() : void{
-		for($i = 0; $i < self::TABLE_N; $i++){
+		for($i = 0; $i <= self::TABLE_N; $i++){
 			self::$table[$i] = sin($i * M_PI * 2 / self::TABLE_N);
 		}
 	}

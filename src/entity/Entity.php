@@ -613,7 +613,7 @@ abstract class Entity{
 
 	public function getDirectionPlane() : Vector2{
 		if(null === $this->cacheDirectionPlane){
-			return $this->cacheDirectionPlane = (new Vector2(-MathHelper::cos(MathHelper::RAD_DEG * $this->location->yaw - M_PI_2), -MathHelper::sin(MathHelper::RAD_DEG * $this->location->pitch - M_PI_2)))->normalize();
+			return $this->cacheDirectionPlane = (new Vector2(-MathHelper::cos(MathHelper::RAD_DEG * $this->location->yaw - M_PI_2), -MathHelper::sin(MathHelper::RAD_DEG * $this->location->yaw - M_PI_2)))->normalize();
 		}
 
 		return clone $this->cacheDirectionPlane;

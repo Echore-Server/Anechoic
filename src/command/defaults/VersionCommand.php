@@ -60,7 +60,7 @@ class VersionCommand extends VanillaCommand{
 				$versionColor . VersionInfo::VERSION()->getFullVersion() . TextFormat::RESET,
 				TextFormat::GREEN . VersionInfo::GIT_HASH() . TextFormat::RESET
 			));
-			$sender->sendMessage("Anechoic Version: " . TextFormat::RED . VersionInfo::ANECHOIC_VERSION . TextFormat::GRAY . "(github: https://github.com/Echore-Server/Anechoic)" . TextFormat::RESET);
+			$sender->sendMessage("Anechoic Version: " . TextFormat::RED . VersionInfo::ANECHOIC_VERSION . TextFormat::GRAY . " (github: https://github.com/Echore-Server/Anechoic)" . TextFormat::RESET);
 			$sender->sendMessage(KnownTranslationFactory::pocketmine_command_version_minecraftVersion(
 				TextFormat::GREEN . ProtocolInfo::MINECRAFT_VERSION_NETWORK . TextFormat::RESET,
 				TextFormat::GREEN . ProtocolInfo::CURRENT_PROTOCOL . TextFormat::RESET
