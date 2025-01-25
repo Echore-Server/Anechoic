@@ -43,8 +43,8 @@ final class GarbageCollectorManager{
 	//behavioural changes.
 	private const GC_THRESHOLD_TRIGGER = 100;
 	private const GC_THRESHOLD_MAX = 1_000_000_000;
-	private const GC_THRESHOLD_DEFAULT = 10_001;
-	private const GC_THRESHOLD_STEP = 10_000;
+	private const GC_THRESHOLD_DEFAULT = 50_001;
+	private const GC_THRESHOLD_STEP = 50_000;
 
 	private int $threshold = self::GC_THRESHOLD_DEFAULT;
 	private int $collectionTimeTotalNs = 0;
