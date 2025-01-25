@@ -30,6 +30,7 @@ class MathHelper{
 
 	const TABLE_N = 0xffff;
 	const RAD_DEG = M_PI / 180;
+	const COS_OFFSET = (self::TABLE_N + 1) / 4;
 	/** @var float[] */
 	private static ?array $table = null;
 
@@ -46,6 +47,6 @@ class MathHelper{
 
 	public static function cos(float $f) : float{
 		if(self::$table === null) self::initTable();
-		return self::$table[((int) ($f * 10430.378 + 16384.0)) & self::TABLE_N];
+		return self::$table[((int) ($f * 10430.378 + self::COS_OFFSET)) & self::TABLE_N];
 	}
 }
