@@ -63,6 +63,7 @@ use pocketmine\player\Player;
 use pocketmine\Server;
 use pocketmine\timings\Timings;
 use pocketmine\timings\TimingsHandler;
+use pocketmine\utils\MathHelper;
 use pocketmine\utils\Utils;
 use pocketmine\VersionInfo;
 use pocketmine\world\format\Chunk;
@@ -597,10 +598,12 @@ abstract class Entity{
 
 	public function getDirectionVector() : Vector3{
 		if(null === $this->cacheDirectionVector){
-			$y = -sin(deg2rad($this->location->pitch));
-			$xz = cos(deg2rad($this->location->pitch));
-			$x = -$xz * sin(deg2rad($this->location->yaw));
-			$z = $xz * cos(deg2rad($this->location->yaw));
+			$pitchRad = MathHelper::RAD_DEG * $this->location->pitch;
+			$yawRad = MathHelper::RAD_DEG * $this->location->yaw;
+			$y = -MathHelper::sin($pitchRad);
+			$xz = MathHelper::cos($pitchRad);
+			$x = -$xz * MathHelper::sin($yawRad);
+			$z = $xz * MathHelper::cos($yawRad);
 
 			return $this->cacheDirectionVector = (new Vector3($x, $y, $z))->normalize();
 		}
@@ -610,7 +613,7 @@ abstract class Entity{
 
 	public function getDirectionPlane() : Vector2{
 		if(null === $this->cacheDirectionPlane){
-			return $this->cacheDirectionPlane = (new Vector2(-cos(deg2rad($this->location->yaw) - M_PI_2), -sin(deg2rad($this->location->yaw) - M_PI_2)))->normalize();
+			return $this->cacheDirectionPlane = (new Vector2(-MathHelper::cos(MathHelper::RAD_DEG * $this->location->yaw - M_PI_2), -MathHelper::sin(MathHelper::RAD_DEG * $this->location->pitch - M_PI_2)))->normalize();
 		}
 
 		return clone $this->cacheDirectionPlane;

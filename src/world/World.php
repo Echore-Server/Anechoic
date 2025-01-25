@@ -83,6 +83,7 @@ use pocketmine\Server;
 use pocketmine\ServerConfigGroup;
 use pocketmine\utils\AssumptionFailedError;
 use pocketmine\utils\Limits;
+use pocketmine\utils\MathHelper;
 use pocketmine\utils\ReversePriorityQueue;
 use pocketmine\utils\Utils;
 use pocketmine\world\biome\Biome;
@@ -1644,7 +1645,7 @@ class World implements ChunkManager{
 
 		//Offset the sun progress to be above the horizon longer at dusk and dawn
 		//this is roughly an inverted sine curve, which pushes the sun progress back at dusk and forwards at dawn
-		$diff = (((1 - ((cos($sunProgress * M_PI) + 1) / 2)) - $sunProgress) / 3);
+		$diff = (((1 - ((MathHelper::cos($sunProgress * M_PI) + 1) / 2)) - $sunProgress) / 3);
 
 		return $sunProgress + $diff;
 	}
@@ -1675,7 +1676,7 @@ class World implements ChunkManager{
 	 * to get a real light value.
 	 */
 	public function computeSkyLightReduction() : int{
-		$percentage = max(0, min(1, -(cos($this->getSunAngleRadians()) * 2 - 0.5)));
+		$percentage = max(0, min(1, -(MathHelper::cos($this->getSunAngleRadians()) * 2 - 0.5)));
 
 		//TODO: check rain and thunder level
 

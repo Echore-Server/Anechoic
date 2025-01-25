@@ -11,3 +11,5 @@
 - Dropped `Compressor` support (only `ZlibCompressor`)
 - Living's armor inventory compound data is no longer synced (such as durability, dye colors)
 - `Entity::getDirectionVector`, `Entity::getDirectionPlane` are now using cache
+- Added `MathHelper`
+- Mathematics functions (sin, cos) are now using table

@@ -31,6 +31,7 @@ use pocketmine\math\AxisAlignedBB;
 use pocketmine\math\Facing;
 use pocketmine\math\Vector3;
 use pocketmine\player\Player;
+use pocketmine\utils\MathHelper;
 use function cos;
 use function max;
 use function round;
@@ -95,7 +96,7 @@ class DaylightSensor extends Transparent{
 		}
 
 		$sunAngle = $world->getSunAnglePercentage();
-		return max(0, (int) round($lightLevel * cos(($sunAngle + ((($sunAngle < 0.5 ? 0 : 1) - $sunAngle) / 5)) * 2 * M_PI)));
+		return max(0, (int) round($lightLevel * MathHelper::cos(($sunAngle + ((($sunAngle < 0.5 ? 0 : 1) - $sunAngle) / 5)) * 2 * M_PI)));
 	}
 
 	//TODO

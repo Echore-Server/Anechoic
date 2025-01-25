@@ -35,6 +35,7 @@ use pocketmine\item\ItemTypeIds;
 use pocketmine\math\RayTraceResult;
 use pocketmine\math\Vector3;
 use pocketmine\player\Player;
+use pocketmine\utils\MathHelper;
 use pocketmine\utils\Random;
 use pocketmine\world\sound\IgniteSound;
 use function cos;
@@ -103,7 +104,7 @@ class TNT extends Opaque{
 		$tnt = new PrimedTNT(Location::fromObject($this->position->add(0.5, 0, 0.5), $world));
 		$tnt->setFuse($fuse);
 		$tnt->setWorksUnderwater($this->worksUnderwater);
-		$tnt->setMotion(new Vector3(-sin($mot) * 0.02, 0.2, -cos($mot) * 0.02));
+		$tnt->setMotion(new Vector3(-MathHelper::sin($mot) * 0.02, 0.2, -MathHelper::cos($mot) * 0.02));
 
 		$tnt->spawnToAll();
 		$tnt->broadcastSound(new IgniteSound());
