@@ -13,3 +13,4 @@
 - `Entity::getDirectionVector`, `Entity::getDirectionPlane` are now using cache
 - Added `MathHelper`
 - Mathematics functions (sin, cos) are now using table
+- Improved performance of player's on ground check (`Player::handleMovementFromNetwork`)

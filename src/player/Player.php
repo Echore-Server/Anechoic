@@ -1199,6 +1199,10 @@ class Player extends Human implements CommandSender, ChunkListener, IPlayer{
 		$this->onGround = $this->isCollidedVertically = $packet->getDelta()->y < 0.0 && abs(fmod($packet->getPosition()->y, 1 / 64)) <= 1E-7;
 		$this->isCollidedHorizontally = $packet->getInputFlags()->get(PlayerAuthInputFlags::HORIZONTAL_COLLISION);
 		$this->isCollided = $this->isCollidedVertically || $this->isCollidedHorizontally;
+
+		if(GameMode::SPECTATOR === $this->gamemode){
+			$this->onGround = false;
+		}
 	}
 
 	/**
