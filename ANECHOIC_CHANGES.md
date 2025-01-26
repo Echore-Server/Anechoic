@@ -14,3 +14,6 @@
 - Added `MathHelper`
 - Mathematics functions (sin, cos) are now using table
 - Improved performance of player's on ground check (`Player::handleMovementFromNetwork`)
+- Added `World::getBlockCollisionBoxesForMovement`
+- Entities no longer broadcast motion
+- Optimized `Vector3::divide`, `Vector2::divide`

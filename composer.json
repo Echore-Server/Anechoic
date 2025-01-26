@@ -36,14 +36,14 @@
       "pocketmine/bedrock-block-upgrade-schema": "~5.0.0+bedrock-1.21.40",
       "pocketmine/bedrock-data": "~2.15.0+bedrock-1.21.50",
       "pocketmine/bedrock-item-upgrade-schema": "~1.14.0+bedrock-1.21.50",
-      "pocketmine/bedrock-protocol": "~35.0.0+bedrock-1.21.50",
+      "echore/bedrock-protocol": "~35.0.0+bedrock-1.21.50",
       "pocketmine/binaryutils": "^0.2.1",
       "pocketmine/callback-validator": "^1.0.2",
       "pocketmine/color": "^0.3.0",
       "pocketmine/errorhandler": "^0.7.0",
       "pocketmine/locale-data": "~2.22.0",
       "pocketmine/log": "^0.4.0",
-      "pocketmine/math": "~1.0.0",
+      "echore/math": "~1.0.0",
       "pocketmine/nbt": "~1.0.0",
       "pocketmine/raklib": "~1.1.0",
       "pocketmine/raklib-ipc": "~1.0.0",
@@ -72,6 +72,22 @@
          "pocketmine\\phpstan\\rules\\": "tests/phpstan/rules"
       }
    },
+   "repositories": [
+      {
+         "type": "path",
+         "url": "../Math",
+         "options": {
+            "symlink": false
+         }
+      },
+      {
+         "type": "path",
+         "url": "../BedrockProtocol",
+         "options": {
+            "symlink": false
+         }
+      }
+   ],
    "config": {
       "platform": {
          "php": "8.1.0"

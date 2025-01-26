@@ -73,14 +73,11 @@ use pocketmine\world\World;
 use function abs;
 use function array_map;
 use function assert;
-use function cos;
 use function count;
-use function deg2rad;
 use function floatval;
 use function floor;
 use function fmod;
 use function get_class;
-use function sin;
 use function spl_object_id;
 use const M_PI_2;
 
@@ -96,6 +93,7 @@ abstract class Entity{
 	private const TAG_FALL_DISTANCE = 'FallDistance'; // TAG_Float
 	private const TAG_CUSTOM_NAME = 'CustomName'; // TAG_String
 	private const TAG_CUSTOM_NAME_VISIBLE = 'CustomNameVisible'; // TAG_Byte
+	private static int $entityCount = 1;
 	public AxisAlignedBB $boundingBox;
 	public bool $onGround = false;
 	public EntitySizeInfo $size;
@@ -107,19 +105,16 @@ abstract class Entity{
 	public bool $isCollidedHorizontally = false;
 	public bool $isCollidedVertically = false;
 	public int $noDamageTicks = 0;
-
 	/**
 	 * @var Player[]
 	 *
 	 * @phpstan-var array<int, Player>
 	 */
 	protected array $hasSpawned = [];
-
 	/** @var array<int, NetworkSession> */
 	protected array $hasSpawnedSessions = [];
 	protected int $id;
 	protected ?EntityDamageEvent $lastDamageCause = null;
-
 	/** @var null|Block[] */
 	protected ?array $blocksAround = null;
 	protected Location $location;
@@ -151,8 +146,6 @@ abstract class Entity{
 	protected bool $silent = false;
 	protected ?int $ownerId = null;
 	protected ?int $targetId = null;
-
-	private static int $entityCount = 1;
 	private ?Vector3 $cacheDirectionVector = null;
 	private ?Vector2 $cacheDirectionPlane = null;
 	private EntityMetadataCollection $networkProperties;
@@ -206,13 +199,22 @@ abstract class Entity{
 		$this->scheduleUpdate();
 	}
 
-	public function __destruct(){
-		$this->close();
-	}
+	abstract protected function getInitialSizeInfo() : EntitySizeInfo;
 
-	public function __toString(){
-		return (new \ReflectionClass($this))->getShortName() . '(' . $this->getId() . ')';
-	}
+	/**
+	 * Returns the percentage by which the entity's velocity is reduced per tick when moving through air.
+	 * The entity's velocity is multiplied by 1 minus this value.
+	 *
+	 * @return float 0-1
+	 */
+	abstract protected function getInitialDragMultiplier() : float;
+
+	/**
+	 * Returns the downwards acceleration of the entity when falling, in blocks/tick².
+	 *
+	 * @return float minimum 0
+	 */
+	abstract protected function getInitialGravity() : float;
 
 	/**
 	 * Returns a new runtime entity ID for a new entity.
@@ -225,11 +227,117 @@ abstract class Entity{
 		return $this->location->getWorld();
 	}
 
+	protected function recalculateBoundingBox() : void{
+		$halfWidth = $this->size->getWidth() / 2;
+
+		$this->boundingBox = new AxisAlignedBB(
+			$this->location->x - $halfWidth,
+			$this->location->y + $this->ySize,
+			$this->location->z - $halfWidth,
+			$this->location->x + $halfWidth,
+			$this->location->y + $this->size->getHeight() + $this->ySize,
+			$this->location->z + $halfWidth
+		);
+	}
+
+	protected function resetLastMovements() : void{
+		$this->lastLocation = $this->location->asLocation();
+		$this->lastMotion = clone $this->motion;
+	}
+
+	protected function addAttributes() : void{ }
+
+	protected function initEntity(CompoundTag $nbt) : void{
+		$this->fireTicks = $nbt->getShort(self::TAG_FIRE, 0);
+
+		$this->onGround = 0 !== $nbt->getByte(self::TAG_ON_GROUND, 0);
+
+		$this->fallDistance = $nbt->getFloat(self::TAG_FALL_DISTANCE, 0.0);
+
+		if(($customNameTag = $nbt->getTag(self::TAG_CUSTOM_NAME)) instanceof StringTag){
+			$this->setNameTag($customNameTag->getValue());
+
+			if(($customNameVisibleTag = $nbt->getTag(self::TAG_CUSTOM_NAME_VISIBLE)) instanceof StringTag){
+				// Older versions incorrectly saved this as a string (see 890f72dbf23a77f294169b79590770470041adc4)
+				$this->setNameTagVisible('' !== $customNameVisibleTag->getValue());
+			}else{
+				$this->setNameTagVisible(0 !== $nbt->getByte(self::TAG_CUSTOM_NAME_VISIBLE, 1));
+			}
+		}
+	}
+
 	final public function scheduleUpdate() : void{
 		if($this->closed){
 			throw new \LogicException('Cannot schedule update on garbage entity ' . get_class($this));
 		}
 		$this->getWorld()->updateEntities[$this->id] = $this;
+	}
+
+	public function __destruct(){
+		$this->close();
+	}
+
+	/**
+	 * Closes the entity and frees attached references.
+	 *
+	 * WARNING: Entities are unusable after this has been executed!
+	 */
+	final public function close() : void{
+		if($this->closeInFlight){
+			return;
+		}
+
+		if(!$this->closed){
+			$this->closeInFlight = true;
+			(new EntityDespawnEvent($this))->call();
+
+			$this->onDispose();
+			$this->closed = true;
+			$this->destroyCycles();
+			$this->closeInFlight = false;
+		}
+	}
+
+	/**
+	 * Called when the entity is disposed to clean up things like viewers. This SHOULD NOT destroy internal state,
+	 * because it may be needed by descendent classes.
+	 */
+	protected function onDispose() : void{
+		$this->despawnFromAll();
+		if($this->location->isValid()){
+			$this->getWorld()->removeEntity($this);
+		}
+	}
+
+	/**
+	 * @deprecated WARNING: This function DOES NOT permanently hide the entity from viewers. As soon as the entity or
+	 * player moves, viewers will once again be able to see the entity.
+	 */
+	public function despawnFromAll() : void{
+		NetworkBroadcastUtils::broadcastEntityEventToSession(
+			$this->hasSpawnedSessions,
+			fn(EntityEventBroadcaster $broadcaster, array $recipients) => $broadcaster->onEntityRemoved($recipients, $this)
+		);
+		$this->hasSpawned = [];
+		$this->hasSpawnedSessions = [];
+	}
+
+	/**
+	 * Called when the entity is disposed, after all events have been fired. This should be used to perform destructive
+	 * circular object references and things which could impact memory usage.
+	 *
+	 * It is expected that the object is unusable after this is called.
+	 */
+	protected function destroyCycles() : void{
+		$this->lastDamageCause = null;
+	}
+
+	public function __toString(){
+		return (new \ReflectionClass($this))->getShortName() . '(' . $this->getId() . ')';
+	}
+
+	public function getId() : int{
+		return $this->id;
 	}
 
 	public function isNameTagAlwaysVisible() : bool{
@@ -272,6 +380,12 @@ abstract class Entity{
 
 	public function getSize() : EntitySizeInfo{
 		return $this->size;
+	}
+
+	protected function setSize(EntitySizeInfo $size) : void{
+		$this->size = $size;
+		$this->recalculateBoundingBox();
+		$this->networkPropertiesDirty = true;
 	}
 
 	/**
@@ -358,10 +472,6 @@ abstract class Entity{
 			$this->ownerId = $owner->getId();
 		}
 		$this->networkPropertiesDirty = true;
-	}
-
-	public function getId() : int{
-		return $this->id;
 	}
 
 	/**
@@ -652,13 +762,19 @@ abstract class Entity{
 		if($this->hasMovementUpdate()){
 			$this->tryChangeMovement();
 
-			$this->motion = $this->motion->withComponents(
-				abs($this->motion->x) <= self::MOTION_THRESHOLD ? 0 : null,
-				abs($this->motion->y) <= self::MOTION_THRESHOLD ? 0 : null,
-				abs($this->motion->z) <= self::MOTION_THRESHOLD ? 0 : null
-			);
+			if(abs($this->motion->x) <= self::MOTION_THRESHOLD){
+				$this->motion->x = 0;
+			}
 
-			if(0.0 !== floatval($this->motion->x) || 0.0 !== floatval($this->motion->y) || 0.0 !== floatval($this->motion->z)){
+			if(abs($this->motion->y) <= self::MOTION_THRESHOLD){
+				$this->motion->y = 0;
+			}
+
+			if(abs($this->motion->z) <= self::MOTION_THRESHOLD){
+				$this->motion->z = 0;
+			}
+
+			if(0.0 !== (float) ($this->motion->x) || 0.0 !== (float) ($this->motion->y) || 0.0 !== (float) ($this->motion->z)){
 				$this->move($this->motion->x, $this->motion->y, $this->motion->z);
 			}
 
@@ -674,6 +790,21 @@ abstract class Entity{
 		$this->timings->stopTiming();
 
 		return $hasUpdate || $this->hasMovementUpdate();
+	}
+
+	/**
+	 * Called from onUpdate() on the first tick of a new entity. This is called before any movement processing or
+	 * main ticking logic. Use this to fire any events related to spawning the entity.
+	 */
+	protected function onFirstUpdate(int $currentTick) : void{
+		(new EntitySpawnEvent($this))->call();
+	}
+
+	/**
+	 * Called to tick entities while dead. Returns whether the entity should be flagged for despawn yet.
+	 */
+	protected function onDeathUpdate(int $tickDiff) : bool{
+		return true;
 	}
 
 	/**
@@ -696,8 +827,219 @@ abstract class Entity{
 			|| !$this->onGround;
 	}
 
+	protected function tryChangeMovement() : void{
+		$friction = 1 - $this->drag;
+
+		$mY = $this->motion->y;
+
+		if($this->applyDragBeforeGravity()){
+			$mY *= $friction;
+		}
+
+		if($this->gravityEnabled){
+			$mY -= $this->gravity;
+		}
+
+		if(!$this->applyDragBeforeGravity()){
+			$mY *= $friction;
+		}
+
+		if($this->onGround){
+			$friction *= $this->getWorld()->getBlockAt((int) floor($this->location->x), (int) floor($this->location->y - 1), (int) floor($this->location->z))->getFrictionFactor();
+		}
+
+		$this->motion->x *= $friction;
+		$this->motion->y = $mY;
+		$this->motion->z *= $friction;
+	}
+
+	protected function applyDragBeforeGravity() : bool{
+		return false;
+	}
+
+	protected function move(float $dx, float $dy, float $dz) : void{
+		$this->blocksAround = null;
+
+		Timings::$entityMove->startTiming();
+		Timings::$entityMoveCollision->startTiming();
+
+		$wantedX = $dx;
+		$wantedY = $dy;
+		$wantedZ = $dz;
+
+		if($this->keepMovement){
+			$this->boundingBox->offset($dx, $dy, $dz);
+		}else{
+			$this->ySize *= self::STEP_CLIP_MULTIPLIER;
+
+			$moveBB = clone $this->boundingBox;
+
+			assert(abs($dx) <= 20 && abs($dy) <= 20 && abs($dz) <= 20, "Movement distance is excessive: dx={$dx}, dy={$dy}, dz={$dz}");
+
+			[$list, $stepList] = $this->getWorld()->getBlockCollisionBoxesForMovement($moveBB->addCoord($dx, $dy, $dz), $this->stepHeight);
+
+			foreach($list as $bb){
+				$dy = $bb->calculateYOffset($moveBB, $dy);
+			}
+
+			$moveBB->offset(0, $dy, 0);
+
+			$fallingFlag = ($this->onGround || ($dy !== $wantedY && $wantedY < 0));
+
+			foreach($list as $bb){
+				$dx = $bb->calculateXOffset($moveBB, $dx);
+			}
+
+			$moveBB->offset($dx, 0, 0);
+
+			foreach($list as $bb){
+				$dz = $bb->calculateZOffset($moveBB, $dz);
+			}
+
+			$moveBB->offset(0, 0, $dz);
+
+			if($this->stepHeight > 0 && $fallingFlag && ($wantedX !== $dx || $wantedZ !== $dz)){
+				$cx = $dx;
+				$cy = $dy;
+				$cz = $dz;
+				$dx = $wantedX;
+				$dy = $this->stepHeight;
+				$dz = $wantedZ;
+
+				$stepBB = clone $this->boundingBox;
+
+				$list = $stepList;
+				foreach($list as $bb){
+					$dy = $bb->calculateYOffset($stepBB, $dy);
+				}
+
+				$stepBB->offset(0, $dy, 0);
+
+				foreach($list as $bb){
+					$dx = $bb->calculateXOffset($stepBB, $dx);
+				}
+
+				$stepBB->offset($dx, 0, 0);
+
+				foreach($list as $bb){
+					$dz = $bb->calculateZOffset($stepBB, $dz);
+				}
+
+				$stepBB->offset(0, 0, $dz);
+
+				$reverseDY = -$dy;
+				foreach($list as $bb){
+					$reverseDY = $bb->calculateYOffset($stepBB, $reverseDY);
+				}
+				$dy += $reverseDY;
+				$stepBB->offset(0, $reverseDY, 0);
+
+				if(($cx ** 2 + $cz ** 2) >= ($dx ** 2 + $dz ** 2)){
+					$dx = $cx;
+					$dy = $cy;
+					$dz = $cz;
+				}else{
+					$moveBB = $stepBB;
+					$this->ySize += $dy;
+				}
+			}
+
+			$this->boundingBox = $moveBB;
+		}
+		Timings::$entityMoveCollision->stopTiming();
+
+		$this->location = new Location(
+			($this->boundingBox->minX + $this->boundingBox->maxX) / 2,
+			$this->boundingBox->minY - $this->ySize,
+			($this->boundingBox->minZ + $this->boundingBox->maxZ) / 2,
+			$this->location->world,
+			$this->location->yaw,
+			$this->location->pitch
+		);
+
+		$this->getWorld()->onEntityMoved($this);
+		$this->checkGroundState($wantedX, $wantedY, $wantedZ, $dx, $dy, $dz);
+		$postFallVerticalVelocity = $this->updateFallState($dy, $this->onGround);
+
+		if($wantedX !== $dx){
+			$this->motion->x = 0;
+		}
+
+		if($postFallVerticalVelocity !== null){
+			$this->motion->y = $postFallVerticalVelocity;
+		}elseif($wantedY !== $dy){
+			$this->motion->y = 0;
+		}
+
+		if($wantedZ !== $dz){
+			$this->motion->z = 0;
+		}
+
+		// TODO: vehicle collision events (first we need to spawn them!)
+
+		Timings::$entityMove->stopTiming();
+	}
+
+	protected function checkGroundState(float $wantedX, float $wantedY, float $wantedZ, float $dx, float $dy, float $dz) : void{
+		$this->isCollidedVertically = $wantedY !== $dy;
+		$this->isCollidedHorizontally = ($wantedX !== $dx || $wantedZ !== $dz);
+		$this->isCollided = ($this->isCollidedHorizontally || $this->isCollidedVertically);
+		$this->onGround = ($wantedY !== $dy && $wantedY < 0);
+	}
+
+	protected function updateFallState(float $distanceThisTick, bool $onGround) : ?float{
+		if($distanceThisTick < $this->fallDistance){
+			// we've fallen some distance (distanceThisTick is negative)
+			// or we ascended back towards where fall distance was measured from initially (distanceThisTick is positive but less than existing fallDistance)
+			$this->fallDistance -= $distanceThisTick;
+		}else{
+			// we ascended past the apex where fall distance was originally being measured from
+			// reset it so it will be measured starting from the new, higher position
+			$this->fallDistance = 0;
+		}
+		if($onGround && $this->fallDistance > 0){
+			$newVerticalVelocity = $this->onHitGround();
+			$this->resetFallDistance();
+
+			return $newVerticalVelocity;
+		}
+
+		return null;
+	}
+
+	/**
+	 * Called when a falling entity hits the ground.
+	 */
+	protected function onHitGround() : ?float{
+		return null;
+	}
+
 	public function resetFallDistance() : void{
 		$this->fallDistance = 0.0;
+	}
+
+	protected function updateMovement(bool $teleport = false) : void{
+		$diffPosition = $this->location->distanceSquared($this->lastLocation);
+		$diffRotation = ($this->location->yaw - $this->lastLocation->yaw) ** 2 + ($this->location->pitch - $this->lastLocation->pitch) ** 2;
+
+		$diffMotion = $this->motion->subtractVector($this->lastMotion)->lengthSquared();
+
+		$still = 0.0 === $this->motion->lengthSquared();
+		$wasStill = 0.0 === $this->lastMotion->lengthSquared();
+		if($wasStill !== $still){
+			// TODO: hack for client-side AI interference: prevent client sided movement when motion is 0
+			$this->setNoClientPredictions($still);
+		}
+
+		if($teleport || $diffPosition > 0.0001 || $diffRotation > 1.0 || (!$wasStill && $still)){
+			$this->lastLocation = $this->location->asLocation();
+
+			$this->broadcastMovement($teleport);
+		}
+
+		if($diffMotion > 0.0025 || $wasStill !== $still){ // 0.05 ** 2
+			$this->lastMotion = clone $this->motion;
+		}
 	}
 
 	/**
@@ -713,8 +1055,29 @@ abstract class Entity{
 		$this->networkPropertiesDirty = true;
 	}
 
+	protected function broadcastMovement(bool $teleport = false) : void{
+		NetworkBroadcastUtils::broadcastPackets($this->hasSpawned, [MoveActorAbsolutePacket::create(
+			$this->id,
+			$this->getOffsetPosition($this->location),
+			$this->location->pitch,
+			$this->location->yaw,
+			$this->location->yaw,
+
+			// TODO: We should be setting FLAG_TELEPORT here to disable client-side movement interpolation, but it
+			// breaks player teleporting (observers see the player rubberband back to the pre-teleport position while
+			// the teleported player sees themselves at the correct position), and does nothing whatsoever for
+			// non-player entities (movement is still interpolated). Both of these are client bugs.
+			// See https://github.com/pmmp/PocketMine-MP/issues/4394
+			$this->onGround ? MoveActorAbsolutePacket::FLAG_GROUND : 0
+		)]);
+	}
+
 	public function getOffsetPosition(Vector3 $vector3) : Vector3{
 		return $vector3;
+	}
+
+	protected function broadcastMotion() : void{
+		NetworkBroadcastUtils::broadcastPackets($this->hasSpawned, [SetActorMotionPacket::create($this->id, $this->getMotion(), tick: 0)]);
 	}
 
 	public function getMotion() : Vector3{
@@ -740,12 +1103,94 @@ abstract class Entity{
 		return true;
 	}
 
+	protected function entityBaseTick(int $tickDiff = 1) : bool{
+		// TODO: check vehicles
+
+		if($this->justCreated){
+			$this->justCreated = false;
+			if(!$this->isAlive()){
+				$this->kill();
+			}
+		}
+
+		$changedProperties = $this->getDirtyNetworkData();
+		if(count($changedProperties) > 0){
+			$this->sendData(null, $changedProperties);
+			$this->networkProperties->clearDirtyProperties();
+		}
+
+		$hasUpdate = false;
+
+		if($this->location->y <= World::Y_MIN - 16 && $this->isAlive()){
+			$ev = new EntityDamageEvent($this, EntityDamageEvent::CAUSE_VOID, 10);
+			$this->attack($ev);
+			$hasUpdate = true;
+		}
+
+		if($this->isOnFire() && $this->doOnFireTick($tickDiff)){
+			$hasUpdate = true;
+		}
+
+		if($this->noDamageTicks > 0){
+			$this->noDamageTicks -= $tickDiff;
+			if($this->noDamageTicks < 0){
+				$this->noDamageTicks = 0;
+			}
+		}
+
+		$this->ticksLived += $tickDiff;
+
+		return $hasUpdate;
+	}
+
 	public function kill() : void{
 		if($this->isAlive()){
 			$this->health = 0;
 			$this->onDeath();
 			$this->scheduleUpdate();
 		}
+	}
+
+	/**
+	 * Override this to do actions on death.
+	 */
+	protected function onDeath() : void{ }
+
+	/**
+	 * @return MetadataProperty[]
+	 *
+	 * @phpstan-return array<int, MetadataProperty>
+	 */
+	final protected function getDirtyNetworkData() : array{
+		if($this->networkPropertiesDirty){
+			$this->syncNetworkData($this->networkProperties);
+			$this->networkPropertiesDirty = false;
+		}
+
+		return $this->networkProperties->getDirty();
+	}
+
+	protected function syncNetworkData(EntityMetadataCollection $properties) : void{
+		$properties->setByte(EntityMetadataProperties::ALWAYS_SHOW_NAMETAG, $this->alwaysShowNameTag ? 1 : 0);
+		$properties->setFloat(EntityMetadataProperties::BOUNDING_BOX_HEIGHT, $this->size->getHeight() / $this->scale);
+		$properties->setFloat(EntityMetadataProperties::BOUNDING_BOX_WIDTH, $this->size->getWidth() / $this->scale);
+		$properties->setFloat(EntityMetadataProperties::SCALE, $this->scale);
+		$properties->setLong(EntityMetadataProperties::LEAD_HOLDER_EID, -1);
+		$properties->setLong(EntityMetadataProperties::OWNER_EID, $this->ownerId ?? -1);
+		$properties->setLong(EntityMetadataProperties::TARGET_EID, $this->targetId ?? 0);
+		$properties->setString(EntityMetadataProperties::NAMETAG, $this->nameTag);
+		$properties->setString(EntityMetadataProperties::SCORE_TAG, $this->scoreTag);
+		$properties->setByte(EntityMetadataProperties::COLOR, 0);
+
+		$properties->setGenericFlag(EntityMetadataFlags::AFFECTED_BY_GRAVITY, $this->gravityEnabled);
+		$properties->setGenericFlag(EntityMetadataFlags::CAN_CLIMB, $this->canClimb);
+		$properties->setGenericFlag(EntityMetadataFlags::CAN_SHOW_NAMETAG, $this->nameTagVisible);
+		$properties->setGenericFlag(EntityMetadataFlags::HAS_COLLISION, true);
+		$properties->setGenericFlag(EntityMetadataFlags::NO_AI, $this->noClientPredictions);
+		$properties->setGenericFlag(EntityMetadataFlags::INVISIBLE, $this->invisible);
+		$properties->setGenericFlag(EntityMetadataFlags::SILENT, $this->silent);
+		$properties->setGenericFlag(EntityMetadataFlags::ONFIRE, $this->isOnFire());
+		$properties->setGenericFlag(EntityMetadataFlags::WALLCLIMBING, $this->canClimbWalls);
 	}
 
 	public function isOnFire() : bool{
@@ -766,6 +1211,20 @@ abstract class Entity{
 		}else{
 			NetworkBroadcastUtils::broadcastEntityEvent($targets, $callback);
 		}
+	}
+
+	/**
+	 * @return MetadataProperty[]
+	 *
+	 * @phpstan-return array<int, MetadataProperty>
+	 */
+	final protected function getAllNetworkData() : array{
+		if($this->networkPropertiesDirty){
+			$this->syncNetworkData($this->networkProperties);
+			$this->networkPropertiesDirty = false;
+		}
+
+		return $this->networkProperties->getAll();
 	}
 
 	public function attack(EntityDamageEvent $source) : void{
@@ -791,9 +1250,39 @@ abstract class Entity{
 		return false;
 	}
 
+	protected function doOnFireTick(int $tickDiff = 1) : bool{
+		if($this->isFireProof() && $this->isOnFire()){
+			$this->extinguish();
+
+			return false;
+		}
+
+		$this->fireTicks -= $tickDiff;
+
+		if((0 === $this->fireTicks % 20) || $tickDiff > 20){
+			$this->dealFireDamage();
+		}
+
+		if(!$this->isOnFire()){
+			$this->extinguish();
+		}else{
+			return true;
+		}
+
+		return false;
+	}
+
 	public function extinguish() : void{
 		$this->fireTicks = 0;
 		$this->networkPropertiesDirty = true;
+	}
+
+	/**
+	 * Called to deal damage to entities when they are on fire.
+	 */
+	protected function dealFireDamage() : void{
+		$ev = new EntityDamageEvent($this, EntityDamageEvent::CAUSE_FIRE_TICK, 1);
+		$this->attack($ev);
 	}
 
 	public function onNearbyBlockChange() : void{
@@ -934,17 +1423,46 @@ abstract class Entity{
 		return false;
 	}
 
-	/**
-	 * @deprecated WARNING: This function DOES NOT permanently hide the entity from viewers. As soon as the entity or
-	 * player moves, viewers will once again be able to see the entity.
-	 */
-	public function despawnFromAll() : void{
-		NetworkBroadcastUtils::broadcastEntityEventToSession(
-			$this->hasSpawnedSessions,
-			fn(EntityEventBroadcaster $broadcaster, array $recipients) => $broadcaster->onEntityRemoved($recipients, $this)
+	protected function setPositionAndRotation(Vector3 $pos, float $yaw, float $pitch) : bool{
+		if($this->setPosition($pos)){
+			$this->setRotation($yaw, $pitch);
+
+			return true;
+		}
+
+		return false;
+	}
+
+	protected function setPosition(Vector3 $pos) : bool{
+		if($this->closed){
+			return false;
+		}
+
+		$oldWorld = $this->getWorld();
+		$newWorld = $pos instanceof Position ? $pos->getWorld() : $oldWorld;
+		if($oldWorld !== $newWorld){
+			$this->despawnFromAll();
+			$oldWorld->removeEntity($this);
+		}
+
+		$this->location = Location::fromObject(
+			$pos,
+			$newWorld,
+			$this->location->yaw,
+			$this->location->pitch
 		);
-		$this->hasSpawned = [];
-		$this->hasSpawnedSessions = [];
+
+		$this->recalculateBoundingBox();
+
+		$this->blocksAround = null;
+
+		if($oldWorld !== $newWorld){
+			$newWorld->addEntity($this);
+		}else{
+			$newWorld->onEntityMoved($this);
+		}
+
+		return true;
 	}
 
 	public function setRotation(float $yaw, float $pitch) : void{
@@ -977,6 +1495,29 @@ abstract class Entity{
 
 			$this->sendSpawnPacket($player);
 		}
+	}
+
+	/**
+	 * Called by spawnTo() to send whatever packets needed to spawn the entity to the client.
+	 */
+	protected function sendSpawnPacket(Player $player) : void{
+		$player->getNetworkSession()->sendDataPacket(AddActorPacket::create(
+			$this->getId(), // TODO: actor unique ID
+			$this->getId(),
+			static::getNetworkTypeId(),
+			$this->location->asVector3(),
+			$this->getMotion(),
+			$this->location->pitch,
+			$this->location->yaw,
+			$this->location->yaw, // TODO: head yaw
+			$this->location->yaw, // TODO: body yaw (wtf mojang?)
+			array_map(function(Attribute $attr) : NetworkAttribute{
+				return new NetworkAttribute($attr->getId(), $attr->getMinValue(), $attr->getMaxValue(), $attr->getValue(), $attr->getDefaultValue(), []);
+			}, $this->attributeMap->getAll()),
+			$this->getAllNetworkData(),
+			new PropertySyncData([], []),
+			[] // TODO: entity links
+		));
 	}
 
 	abstract public static function getNetworkTypeId() : string;
@@ -1044,540 +1585,6 @@ abstract class Entity{
 		if(!$this->silent){
 			$this->getWorld()->addSound($this->location->asVector3(), $sound, $targets ?? $this->getViewers());
 		}
-	}
-
-	/**
-	 * Closes the entity and frees attached references.
-	 *
-	 * WARNING: Entities are unusable after this has been executed!
-	 */
-	final public function close() : void{
-		if($this->closeInFlight){
-			return;
-		}
-
-		if(!$this->closed){
-			$this->closeInFlight = true;
-			(new EntityDespawnEvent($this))->call();
-
-			$this->onDispose();
-			$this->closed = true;
-			$this->destroyCycles();
-			$this->closeInFlight = false;
-		}
-	}
-
-	abstract protected function getInitialSizeInfo() : EntitySizeInfo;
-
-	/**
-	 * Returns the percentage by which the entity's velocity is reduced per tick when moving through air.
-	 * The entity's velocity is multiplied by 1 minus this value.
-	 *
-	 * @return float 0-1
-	 */
-	abstract protected function getInitialDragMultiplier() : float;
-
-	/**
-	 * Returns the downwards acceleration of the entity when falling, in blocks/tick².
-	 *
-	 * @return float minimum 0
-	 */
-	abstract protected function getInitialGravity() : float;
-
-	protected function recalculateBoundingBox() : void{
-		$halfWidth = $this->size->getWidth() / 2;
-
-		$this->boundingBox = new AxisAlignedBB(
-			$this->location->x - $halfWidth,
-			$this->location->y + $this->ySize,
-			$this->location->z - $halfWidth,
-			$this->location->x + $halfWidth,
-			$this->location->y + $this->size->getHeight() + $this->ySize,
-			$this->location->z + $halfWidth
-		);
-	}
-
-	protected function resetLastMovements() : void{
-		$this->lastLocation = $this->location->asLocation();
-		$this->lastMotion = clone $this->motion;
-	}
-
-	protected function addAttributes() : void{ }
-
-	protected function initEntity(CompoundTag $nbt) : void{
-		$this->fireTicks = $nbt->getShort(self::TAG_FIRE, 0);
-
-		$this->onGround = 0 !== $nbt->getByte(self::TAG_ON_GROUND, 0);
-
-		$this->fallDistance = $nbt->getFloat(self::TAG_FALL_DISTANCE, 0.0);
-
-		if(($customNameTag = $nbt->getTag(self::TAG_CUSTOM_NAME)) instanceof StringTag){
-			$this->setNameTag($customNameTag->getValue());
-
-			if(($customNameVisibleTag = $nbt->getTag(self::TAG_CUSTOM_NAME_VISIBLE)) instanceof StringTag){
-				// Older versions incorrectly saved this as a string (see 890f72dbf23a77f294169b79590770470041adc4)
-				$this->setNameTagVisible('' !== $customNameVisibleTag->getValue());
-			}else{
-				$this->setNameTagVisible(0 !== $nbt->getByte(self::TAG_CUSTOM_NAME_VISIBLE, 1));
-			}
-		}
-	}
-
-	protected function setSize(EntitySizeInfo $size) : void{
-		$this->size = $size;
-		$this->recalculateBoundingBox();
-		$this->networkPropertiesDirty = true;
-	}
-
-	/**
-	 * Called from onUpdate() on the first tick of a new entity. This is called before any movement processing or
-	 * main ticking logic. Use this to fire any events related to spawning the entity.
-	 */
-	protected function onFirstUpdate(int $currentTick) : void{
-		(new EntitySpawnEvent($this))->call();
-	}
-
-	/**
-	 * Called to tick entities while dead. Returns whether the entity should be flagged for despawn yet.
-	 */
-	protected function onDeathUpdate(int $tickDiff) : bool{
-		return true;
-	}
-
-	protected function tryChangeMovement() : void{
-		$friction = 1 - $this->drag;
-
-		$mY = $this->motion->y;
-
-		if($this->applyDragBeforeGravity()){
-			$mY *= $friction;
-		}
-
-		if($this->gravityEnabled){
-			$mY -= $this->gravity;
-		}
-
-		if(!$this->applyDragBeforeGravity()){
-			$mY *= $friction;
-		}
-
-		if($this->onGround){
-			$friction *= $this->getWorld()->getBlockAt((int) floor($this->location->x), (int) floor($this->location->y - 1), (int) floor($this->location->z))->getFrictionFactor();
-		}
-
-		$this->motion = new Vector3($this->motion->x * $friction, $mY, $this->motion->z * $friction);
-	}
-
-	protected function applyDragBeforeGravity() : bool{
-		return false;
-	}
-
-	protected function move(float $dx, float $dy, float $dz) : void{
-		$this->blocksAround = null;
-
-		Timings::$entityMove->startTiming();
-		Timings::$entityMoveCollision->startTiming();
-
-		$wantedX = $dx;
-		$wantedY = $dy;
-		$wantedZ = $dz;
-
-		if($this->keepMovement){
-			$this->boundingBox->offset($dx, $dy, $dz);
-		}else{
-			$this->ySize *= self::STEP_CLIP_MULTIPLIER;
-
-			$moveBB = clone $this->boundingBox;
-
-			assert(abs($dx) <= 20 && abs($dy) <= 20 && abs($dz) <= 20, "Movement distance is excessive: dx={$dx}, dy={$dy}, dz={$dz}");
-
-			$list = $this->getWorld()->getBlockCollisionBoxes($moveBB->addCoord($dx, $dy, $dz));
-
-			foreach($list as $bb){
-				$dy = $bb->calculateYOffset($moveBB, $dy);
-			}
-
-			$moveBB->offset(0, $dy, 0);
-
-			$fallingFlag = ($this->onGround || ($dy !== $wantedY && $wantedY < 0));
-
-			foreach($list as $bb){
-				$dx = $bb->calculateXOffset($moveBB, $dx);
-			}
-
-			$moveBB->offset($dx, 0, 0);
-
-			foreach($list as $bb){
-				$dz = $bb->calculateZOffset($moveBB, $dz);
-			}
-
-			$moveBB->offset(0, 0, $dz);
-
-			if($this->stepHeight > 0 && $fallingFlag && ($wantedX !== $dx || $wantedZ !== $dz)){
-				$cx = $dx;
-				$cy = $dy;
-				$cz = $dz;
-				$dx = $wantedX;
-				$dy = $this->stepHeight;
-				$dz = $wantedZ;
-
-				$stepBB = clone $this->boundingBox;
-
-				$list = $this->getWorld()->getBlockCollisionBoxes($stepBB->addCoord($dx, $dy, $dz));
-				foreach($list as $bb){
-					$dy = $bb->calculateYOffset($stepBB, $dy);
-				}
-
-				$stepBB->offset(0, $dy, 0);
-
-				foreach($list as $bb){
-					$dx = $bb->calculateXOffset($stepBB, $dx);
-				}
-
-				$stepBB->offset($dx, 0, 0);
-
-				foreach($list as $bb){
-					$dz = $bb->calculateZOffset($stepBB, $dz);
-				}
-
-				$stepBB->offset(0, 0, $dz);
-
-				$reverseDY = -$dy;
-				foreach($list as $bb){
-					$reverseDY = $bb->calculateYOffset($stepBB, $reverseDY);
-				}
-				$dy += $reverseDY;
-				$stepBB->offset(0, $reverseDY, 0);
-
-				if(($cx ** 2 + $cz ** 2) >= ($dx ** 2 + $dz ** 2)){
-					$dx = $cx;
-					$dy = $cy;
-					$dz = $cz;
-				}else{
-					$moveBB = $stepBB;
-					$this->ySize += $dy;
-				}
-			}
-
-			$this->boundingBox = $moveBB;
-		}
-		Timings::$entityMoveCollision->stopTiming();
-
-		$this->location = new Location(
-			($this->boundingBox->minX + $this->boundingBox->maxX) / 2,
-			$this->boundingBox->minY - $this->ySize,
-			($this->boundingBox->minZ + $this->boundingBox->maxZ) / 2,
-			$this->location->world,
-			$this->location->yaw,
-			$this->location->pitch
-		);
-
-		$this->getWorld()->onEntityMoved($this);
-		$this->checkGroundState($wantedX, $wantedY, $wantedZ, $dx, $dy, $dz);
-		$postFallVerticalVelocity = $this->updateFallState($dy, $this->onGround);
-
-		$this->motion = $this->motion->withComponents(
-			$wantedX !== $dx ? 0 : null,
-			$postFallVerticalVelocity ?? ($wantedY !== $dy ? 0 : null),
-			$wantedZ !== $dz ? 0 : null
-		);
-
-		// TODO: vehicle collision events (first we need to spawn them!)
-
-		Timings::$entityMove->stopTiming();
-	}
-
-	protected function checkGroundState(float $wantedX, float $wantedY, float $wantedZ, float $dx, float $dy, float $dz) : void{
-		$this->isCollidedVertically = $wantedY !== $dy;
-		$this->isCollidedHorizontally = ($wantedX !== $dx || $wantedZ !== $dz);
-		$this->isCollided = ($this->isCollidedHorizontally || $this->isCollidedVertically);
-		$this->onGround = ($wantedY !== $dy && $wantedY < 0);
-	}
-
-	protected function updateFallState(float $distanceThisTick, bool $onGround) : ?float{
-		if($distanceThisTick < $this->fallDistance){
-			// we've fallen some distance (distanceThisTick is negative)
-			// or we ascended back towards where fall distance was measured from initially (distanceThisTick is positive but less than existing fallDistance)
-			$this->fallDistance -= $distanceThisTick;
-		}else{
-			// we ascended past the apex where fall distance was originally being measured from
-			// reset it so it will be measured starting from the new, higher position
-			$this->fallDistance = 0;
-		}
-		if($onGround && $this->fallDistance > 0){
-			$newVerticalVelocity = $this->onHitGround();
-			$this->resetFallDistance();
-
-			return $newVerticalVelocity;
-		}
-
-		return null;
-	}
-
-	/**
-	 * Called when a falling entity hits the ground.
-	 */
-	protected function onHitGround() : ?float{
-		return null;
-	}
-
-	protected function updateMovement(bool $teleport = false) : void{
-		$diffPosition = $this->location->distanceSquared($this->lastLocation);
-		$diffRotation = ($this->location->yaw - $this->lastLocation->yaw) ** 2 + ($this->location->pitch - $this->lastLocation->pitch) ** 2;
-
-		$diffMotion = $this->motion->subtractVector($this->lastMotion)->lengthSquared();
-
-		$still = 0.0 === $this->motion->lengthSquared();
-		$wasStill = 0.0 === $this->lastMotion->lengthSquared();
-		if($wasStill !== $still){
-			// TODO: hack for client-side AI interference: prevent client sided movement when motion is 0
-			$this->setNoClientPredictions($still);
-		}
-
-		if($teleport || $diffPosition > 0.0001 || $diffRotation > 1.0 || (!$wasStill && $still)){
-			$this->lastLocation = $this->location->asLocation();
-
-			$this->broadcastMovement($teleport);
-		}
-
-		if($diffMotion > 0.0025 || $wasStill !== $still){ // 0.05 ** 2
-			$this->lastMotion = clone $this->motion;
-
-			$this->broadcastMotion();
-		}
-	}
-
-	protected function broadcastMovement(bool $teleport = false) : void{
-		NetworkBroadcastUtils::broadcastPackets($this->hasSpawned, [MoveActorAbsolutePacket::create(
-			$this->id,
-			$this->getOffsetPosition($this->location),
-			$this->location->pitch,
-			$this->location->yaw,
-			$this->location->yaw,
-
-			// TODO: We should be setting FLAG_TELEPORT here to disable client-side movement interpolation, but it
-			// breaks player teleporting (observers see the player rubberband back to the pre-teleport position while
-			// the teleported player sees themselves at the correct position), and does nothing whatsoever for
-			// non-player entities (movement is still interpolated). Both of these are client bugs.
-			// See https://github.com/pmmp/PocketMine-MP/issues/4394
-			$this->onGround ? MoveActorAbsolutePacket::FLAG_GROUND : 0
-		)]);
-	}
-
-	protected function broadcastMotion() : void{
-		NetworkBroadcastUtils::broadcastPackets($this->hasSpawned, [SetActorMotionPacket::create($this->id, $this->getMotion(), tick: 0)]);
-	}
-
-	protected function entityBaseTick(int $tickDiff = 1) : bool{
-		// TODO: check vehicles
-
-		if($this->justCreated){
-			$this->justCreated = false;
-			if(!$this->isAlive()){
-				$this->kill();
-			}
-		}
-
-		$changedProperties = $this->getDirtyNetworkData();
-		if(count($changedProperties) > 0){
-			$this->sendData(null, $changedProperties);
-			$this->networkProperties->clearDirtyProperties();
-		}
-
-		$hasUpdate = false;
-
-		if($this->location->y <= World::Y_MIN - 16 && $this->isAlive()){
-			$ev = new EntityDamageEvent($this, EntityDamageEvent::CAUSE_VOID, 10);
-			$this->attack($ev);
-			$hasUpdate = true;
-		}
-
-		if($this->isOnFire() && $this->doOnFireTick($tickDiff)){
-			$hasUpdate = true;
-		}
-
-		if($this->noDamageTicks > 0){
-			$this->noDamageTicks -= $tickDiff;
-			if($this->noDamageTicks < 0){
-				$this->noDamageTicks = 0;
-			}
-		}
-
-		$this->ticksLived += $tickDiff;
-
-		return $hasUpdate;
-	}
-
-	/**
-	 * Override this to do actions on death.
-	 */
-	protected function onDeath() : void{ }
-
-	/**
-	 * @return MetadataProperty[]
-	 *
-	 * @phpstan-return array<int, MetadataProperty>
-	 */
-	final protected function getDirtyNetworkData() : array{
-		if($this->networkPropertiesDirty){
-			$this->syncNetworkData($this->networkProperties);
-			$this->networkPropertiesDirty = false;
-		}
-
-		return $this->networkProperties->getDirty();
-	}
-
-	protected function syncNetworkData(EntityMetadataCollection $properties) : void{
-		$properties->setByte(EntityMetadataProperties::ALWAYS_SHOW_NAMETAG, $this->alwaysShowNameTag ? 1 : 0);
-		$properties->setFloat(EntityMetadataProperties::BOUNDING_BOX_HEIGHT, $this->size->getHeight() / $this->scale);
-		$properties->setFloat(EntityMetadataProperties::BOUNDING_BOX_WIDTH, $this->size->getWidth() / $this->scale);
-		$properties->setFloat(EntityMetadataProperties::SCALE, $this->scale);
-		$properties->setLong(EntityMetadataProperties::LEAD_HOLDER_EID, -1);
-		$properties->setLong(EntityMetadataProperties::OWNER_EID, $this->ownerId ?? -1);
-		$properties->setLong(EntityMetadataProperties::TARGET_EID, $this->targetId ?? 0);
-		$properties->setString(EntityMetadataProperties::NAMETAG, $this->nameTag);
-		$properties->setString(EntityMetadataProperties::SCORE_TAG, $this->scoreTag);
-		$properties->setByte(EntityMetadataProperties::COLOR, 0);
-
-		$properties->setGenericFlag(EntityMetadataFlags::AFFECTED_BY_GRAVITY, $this->gravityEnabled);
-		$properties->setGenericFlag(EntityMetadataFlags::CAN_CLIMB, $this->canClimb);
-		$properties->setGenericFlag(EntityMetadataFlags::CAN_SHOW_NAMETAG, $this->nameTagVisible);
-		$properties->setGenericFlag(EntityMetadataFlags::HAS_COLLISION, true);
-		$properties->setGenericFlag(EntityMetadataFlags::NO_AI, $this->noClientPredictions);
-		$properties->setGenericFlag(EntityMetadataFlags::INVISIBLE, $this->invisible);
-		$properties->setGenericFlag(EntityMetadataFlags::SILENT, $this->silent);
-		$properties->setGenericFlag(EntityMetadataFlags::ONFIRE, $this->isOnFire());
-		$properties->setGenericFlag(EntityMetadataFlags::WALLCLIMBING, $this->canClimbWalls);
-	}
-
-	/**
-	 * @return MetadataProperty[]
-	 *
-	 * @phpstan-return array<int, MetadataProperty>
-	 */
-	final protected function getAllNetworkData() : array{
-		if($this->networkPropertiesDirty){
-			$this->syncNetworkData($this->networkProperties);
-			$this->networkPropertiesDirty = false;
-		}
-
-		return $this->networkProperties->getAll();
-	}
-
-	protected function doOnFireTick(int $tickDiff = 1) : bool{
-		if($this->isFireProof() && $this->isOnFire()){
-			$this->extinguish();
-
-			return false;
-		}
-
-		$this->fireTicks -= $tickDiff;
-
-		if((0 === $this->fireTicks % 20) || $tickDiff > 20){
-			$this->dealFireDamage();
-		}
-
-		if(!$this->isOnFire()){
-			$this->extinguish();
-		}else{
-			return true;
-		}
-
-		return false;
-	}
-
-	/**
-	 * Called to deal damage to entities when they are on fire.
-	 */
-	protected function dealFireDamage() : void{
-		$ev = new EntityDamageEvent($this, EntityDamageEvent::CAUSE_FIRE_TICK, 1);
-		$this->attack($ev);
-	}
-
-	protected function setPositionAndRotation(Vector3 $pos, float $yaw, float $pitch) : bool{
-		if($this->setPosition($pos)){
-			$this->setRotation($yaw, $pitch);
-
-			return true;
-		}
-
-		return false;
-	}
-
-	protected function setPosition(Vector3 $pos) : bool{
-		if($this->closed){
-			return false;
-		}
-
-		$oldWorld = $this->getWorld();
-		$newWorld = $pos instanceof Position ? $pos->getWorld() : $oldWorld;
-		if($oldWorld !== $newWorld){
-			$this->despawnFromAll();
-			$oldWorld->removeEntity($this);
-		}
-
-		$this->location = Location::fromObject(
-			$pos,
-			$newWorld,
-			$this->location->yaw,
-			$this->location->pitch
-		);
-
-		$this->recalculateBoundingBox();
-
-		$this->blocksAround = null;
-
-		if($oldWorld !== $newWorld){
-			$newWorld->addEntity($this);
-		}else{
-			$newWorld->onEntityMoved($this);
-		}
-
-		return true;
-	}
-
-	/**
-	 * Called by spawnTo() to send whatever packets needed to spawn the entity to the client.
-	 */
-	protected function sendSpawnPacket(Player $player) : void{
-		$player->getNetworkSession()->sendDataPacket(AddActorPacket::create(
-			$this->getId(), // TODO: actor unique ID
-			$this->getId(),
-			static::getNetworkTypeId(),
-			$this->location->asVector3(),
-			$this->getMotion(),
-			$this->location->pitch,
-			$this->location->yaw,
-			$this->location->yaw, // TODO: head yaw
-			$this->location->yaw, // TODO: body yaw (wtf mojang?)
-			array_map(function(Attribute $attr) : NetworkAttribute{
-				return new NetworkAttribute($attr->getId(), $attr->getMinValue(), $attr->getMaxValue(), $attr->getValue(), $attr->getDefaultValue(), []);
-			}, $this->attributeMap->getAll()),
-			$this->getAllNetworkData(),
-			new PropertySyncData([], []),
-			[] // TODO: entity links
-		));
-	}
-
-	/**
-	 * Called when the entity is disposed to clean up things like viewers. This SHOULD NOT destroy internal state,
-	 * because it may be needed by descendent classes.
-	 */
-	protected function onDispose() : void{
-		$this->despawnFromAll();
-		if($this->location->isValid()){
-			$this->getWorld()->removeEntity($this);
-		}
-	}
-
-	/**
-	 * Called when the entity is disposed, after all events have been fired. This should be used to perform destructive
-	 * circular object references and things which could impact memory usage.
-	 *
-	 * It is expected that the object is unusable after this is called.
-	 */
-	protected function destroyCycles() : void{
-		$this->lastDamageCause = null;
 	}
 
 	protected function checkObstruction(float $x, float $y, float $z) : bool{
