@@ -1196,7 +1196,7 @@ class Player extends Human implements CommandSender, ChunkListener, IPlayer{
 
 	public function handleMovementFromNetwork(Vector3 $newPos, PlayerAuthInputPacket $packet) : void{
 		$this->handleMovement($newPos);
-		$this->onGround = $this->isCollidedVertically = $packet->getDelta()->y < 0.0 && abs(fmod($packet->getPosition()->y, 1 / 64)) <= 1E-7;
+		$this->onGround = $this->isCollidedVertically = $packet->getInputFlags()->get(PlayerAuthInputFlags::VERTICAL_COLLISION);
 		$this->isCollidedHorizontally = $packet->getInputFlags()->get(PlayerAuthInputFlags::HORIZONTAL_COLLISION);
 		$this->isCollided = $this->isCollidedVertically || $this->isCollidedHorizontally;
 

@@ -28,6 +28,7 @@ declare(strict_types=1);
 namespace pocketmine\entity;
 
 use Generator;
+use InvalidArgumentException;
 use pocketmine\block\Block;
 use pocketmine\block\Water;
 use pocketmine\entity\animation\Animation;
@@ -63,6 +64,7 @@ use pocketmine\player\Player;
 use pocketmine\Server;
 use pocketmine\timings\Timings;
 use pocketmine\timings\TimingsHandler;
+use pocketmine\utils\AssumptionFailedError;
 use pocketmine\utils\MathHelper;
 use pocketmine\utils\Utils;
 use pocketmine\VersionInfo;
@@ -372,7 +374,7 @@ abstract class Entity{
 
 	public function setScale(float $value) : void{
 		if($value <= 0){
-			throw new \InvalidArgumentException('Scale must be greater than 0');
+			throw new InvalidArgumentException('Scale must be greater than 0');
 		}
 		$this->scale = $value;
 		$this->setSize($this->getInitialSizeInfo()->scale($value));
@@ -461,13 +463,13 @@ abstract class Entity{
 	/**
 	 * Sets the owner of the entity. Passing null will remove the current owner.
 	 *
-	 * @throws \InvalidArgumentException if the supplied entity is not valid
+	 * @throws InvalidArgumentException if the supplied entity is not valid
 	 */
 	public function setOwningEntity(?Entity $owner) : void{
 		if(null === $owner){
 			$this->ownerId = null;
 		}elseif($owner->closed){
-			throw new \InvalidArgumentException('Supplied owning entity is garbage and cannot be used');
+			throw new InvalidArgumentException('Supplied owning entity is garbage and cannot be used');
 		}else{
 			$this->ownerId = $owner->getId();
 		}
@@ -492,13 +494,13 @@ abstract class Entity{
 	/**
 	 * Sets the entity's target entity. Passing null will remove the current target.
 	 *
-	 * @throws \InvalidArgumentException if the target entity is not valid
+	 * @throws InvalidArgumentException if the target entity is not valid
 	 */
 	public function setTargetEntity(?Entity $target) : void{
 		if(null === $target){
 			$this->targetId = null;
 		}elseif($target->closed){
-			throw new \InvalidArgumentException('Supplied target entity is garbage and cannot be used');
+			throw new InvalidArgumentException('Supplied target entity is garbage and cannot be used');
 		}else{
 			$this->targetId = $target->getId();
 		}
@@ -646,11 +648,11 @@ abstract class Entity{
 	}
 
 	/**
-	 * @throws \InvalidArgumentException
+	 * @throws InvalidArgumentException
 	 */
 	public function setFireTicks(int $fireTicks) : void{
 		if($fireTicks < 0 || $fireTicks > 0x7FFF){
-			throw new \InvalidArgumentException('Fire ticks must be in range 0 ... ' . 0x7FFF . ", got {$fireTicks}");
+			throw new InvalidArgumentException('Fire ticks must be in range 0 ... ' . 0x7FFF . ", got {$fireTicks}");
 		}
 		if(!$this->isFireProof()){
 			$this->fireTicks = $fireTicks;
@@ -723,7 +725,8 @@ abstract class Entity{
 
 	public function getDirectionPlane() : Vector2{
 		if(null === $this->cacheDirectionPlane){
-			return $this->cacheDirectionPlane = (new Vector2(-MathHelper::cos(MathHelper::RAD_DEG * $this->location->yaw - M_PI_2), -MathHelper::sin(MathHelper::RAD_DEG * $this->location->yaw - M_PI_2)))->normalize();
+			$f = MathHelper::RAD_DEG * $this->location->yaw - M_PI_2;
+			return $this->cacheDirectionPlane = (new Vector2(-MathHelper::cos($f), -MathHelper::sin($f)))->normalize();
 		}
 
 		return clone $this->cacheDirectionPlane;
@@ -948,14 +951,12 @@ abstract class Entity{
 		}
 		Timings::$entityMoveCollision->stopTiming();
 
-		$this->location = new Location(
-			($this->boundingBox->minX + $this->boundingBox->maxX) / 2,
-			$this->boundingBox->minY - $this->ySize,
-			($this->boundingBox->minZ + $this->boundingBox->maxZ) / 2,
-			$this->location->world,
-			$this->location->yaw,
-			$this->location->pitch
-		);
+		$this->location->x = ($this->boundingBox->minX + $this->boundingBox->maxX) / 2;
+		$this->location->y = $this->boundingBox->minY - $this->ySize;
+		$this->location->z = ($this->boundingBox->minZ + $this->boundingBox->maxZ) / 2;
+		if(!$this->location->isValid()){
+			throw new InvalidArgumentException("World has been unloaded and cannot be used");
+		}
 
 		$this->getWorld()->onEntityMoved($this);
 		$this->checkGroundState($wantedX, $wantedY, $wantedZ, $dx, $dy, $dz);
