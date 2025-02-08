@@ -710,8 +710,8 @@ abstract class Entity{
 
 	public function getDirectionVector() : Vector3{
 		if(null === $this->cacheDirectionVector){
-			$pitchRad = MathHelper::RAD_DEG * $this->location->pitch;
-			$yawRad = MathHelper::RAD_DEG * $this->location->yaw;
+			$pitchRad = MathHelper::DEG_RAD * $this->location->pitch;
+			$yawRad = MathHelper::DEG_RAD * $this->location->yaw;
 			$y = -MathHelper::sin($pitchRad);
 			$xz = MathHelper::cos($pitchRad);
 			$x = -$xz * MathHelper::sin($yawRad);
@@ -725,7 +725,7 @@ abstract class Entity{
 
 	public function getDirectionPlane() : Vector2{
 		if(null === $this->cacheDirectionPlane){
-			$f = MathHelper::RAD_DEG * $this->location->yaw - M_PI_2;
+			$f = MathHelper::DEG_RAD * $this->location->yaw - M_PI_2;
 			return $this->cacheDirectionPlane = (new Vector2(-MathHelper::cos($f), -MathHelper::sin($f)))->normalize();
 		}
 

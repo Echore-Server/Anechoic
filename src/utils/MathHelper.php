@@ -29,8 +29,8 @@ use const M_PI;
 class MathHelper{
 
 	const TABLE_N = 0xffff;
-	const RAD_DEG = M_PI / 180;
-	const DEG_RAD = 180 / M_PI;
+	const DEG_RAD = M_PI / 180;
+	const RAD_DEG = 180 / M_PI;
 	const COS_OFFSET = (self::TABLE_N + 1) / 4;
 	/** @var float[] */
 	private static ?array $table = null;
