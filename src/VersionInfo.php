@@ -33,7 +33,7 @@ use function str_repeat;
 
 final class VersionInfo{
 	public const NAME = "Anechoic";
-	public const BASE_VERSION = "5.24.1";
+	public const BASE_VERSION = "5.25.1";
 	public const ANECHOIC_VERSION = "1.1.0";
 	public const IS_DEVELOPMENT_BUILD = true;
 	public const BUILD_CHANNEL = "stable";
