@@ -1027,10 +1027,7 @@ abstract class Entity{
 
 		$still = 0.0 === $this->motion->lengthSquared();
 		$wasStill = 0.0 === $this->lastMotion->lengthSquared();
-		if($wasStill !== $still){
-			// TODO: hack for client-side AI interference: prevent client sided movement when motion is 0
-			$this->setNoClientPredictions($still);
-		}
+		$this->setNoClientPredictions(true);
 
 		if($teleport || $diffPosition > 0.0001 || $diffRotation > 1.0 || (!$wasStill && $still)){
 			$this->lastLocation = $this->location->asLocation();
@@ -1052,6 +1049,9 @@ abstract class Entity{
 	 * will be able to bypass it.
 	 */
 	public function setNoClientPredictions(bool $value = true) : void{
+		if($value === $this->noClientPredictions){
+			return;
+		}
 		$this->noClientPredictions = $value;
 		$this->networkPropertiesDirty = true;
 	}
