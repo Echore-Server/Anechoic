@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "c6ccfbc64659a6e19a4bf35fad5f5537",
+    "content-hash": "77b983cc23f9a4a73d28de6a3a5f44f1",
     "packages": [
         {
             "name": "adhocore/json-comment",
@@ -127,11 +127,11 @@
         },
         {
             "name": "echore/bedrock-protocol",
-            "version": "35.0.0+bedrock-1.21.60",
+            "version": "36.0.0+bedrock-1.21.60",
             "dist": {
                 "type": "path",
                 "url": "../BedrockProtocol",
-                "reference": "9d20c8884ba7b3b17a2f42bef1ddf1ff0c9f24dc"
+                "reference": "34abb07d0792e8ad268c4d166b2e239cfce25db5"
             },
             "require": {
                 "echore/math": "^0.3.0 || ^0.4.0 || ^1.0.0",
