@@ -52,12 +52,12 @@ final class EventPriority{
 	];
 
 	/**
-	 * Ran first.
+	 * Event call is of very low importance and should be ran first, to allow
+	 * other plugins to further customise the outcome
 	 */
 	public const SERVER = 6;
 	/**
-	 * Event call is of very low importance and should be ran first, to allow
-	 * other plugins to further customise the outcome
+	 * Event call is of super low importance
 	 */
 	public const LOWEST = 5;
 	/**
