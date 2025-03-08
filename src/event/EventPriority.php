@@ -29,7 +29,7 @@ use function mb_strtoupper;
  * List of event priorities
  *
  * Events will be called in this order:
- * LOWEST -> LOW -> NORMAL -> HIGH -> HIGHEST -> MONITOR
+ * SERVER -> LOWEST -> LOW -> NORMAL -> HIGH -> HIGHEST -> MONITOR
  *
  * MONITOR events should not change the event outcome or contents
  *
@@ -42,6 +42,7 @@ final class EventPriority{
 	}
 
 	public const ALL = [
+		self::SERVER,
 		self::LOWEST,
 		self::LOW,
 		self::NORMAL,
@@ -50,6 +51,10 @@ final class EventPriority{
 		self::MONITOR
 	];
 
+	/**
+	 * Ran first.
+	 */
+	public const SERVER = 6;
 	/**
 	 * Event call is of very low importance and should be ran first, to allow
 	 * other plugins to further customise the outcome
@@ -85,6 +90,7 @@ final class EventPriority{
 	 */
 	public static function fromString(string $name) : int{
 		$value = [
+			"SERVER" => self::SERVER,
 			"LOWEST" => self::LOWEST,
 			"LOW" => self::LOW,
 			"NORMAL" => self::NORMAL,
