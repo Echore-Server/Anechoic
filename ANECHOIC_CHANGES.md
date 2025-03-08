@@ -17,3 +17,4 @@
 - Added `World::getBlockCollisionBoxesForMovement`
 - Entities no longer broadcast motion
 - Optimized `Vector3::divide`, `Vector2::divide`
+- Added `EventPriority::SERVER`
