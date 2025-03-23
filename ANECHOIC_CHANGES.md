@@ -1,4 +1,4 @@
-# Major changes
+# Changes
 
 - Removed `Entity::checkBlockIntersections` and related properties
 - Removed `Item::onTickWorn` and related functions (such as Turtle Helmet)
@@ -17,4 +17,5 @@
 - Added `World::getBlockCollisionBoxesForMovement`
 - Entities no longer broadcast motion
 - Optimized `Vector3::divide`, `Vector2::divide`
+- Optimized `Entity::move`
 - Added `EventPriority::SERVER`

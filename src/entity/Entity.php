@@ -27,6 +27,7 @@ declare(strict_types=1);
 
 namespace pocketmine\entity;
 
+use _PHPStan_d25a815b1\Symfony\Component\Console\Exception\LogicException;
 use Generator;
 use InvalidArgumentException;
 use pocketmine\block\Block;
@@ -879,7 +880,12 @@ abstract class Entity{
 
 			assert(abs($dx) <= 20 && abs($dy) <= 20 && abs($dz) <= 20, "Movement distance is excessive: dx={$dx}, dy={$dy}, dz={$dz}");
 
-			[$list, $stepList] = $this->getWorld()->getBlockCollisionBoxesForMovement($moveBB->addCoord($dx, $dy, $dz), $this->stepHeight);
+			if($this->stepHeight > 0 && ($this->onGround || $wantedY < 0)){ // literal falling flag
+				[$list, $stepList] = $this->getWorld()->getBlockCollisionBoxesForMovement($moveBB->addCoord($dx, $dy, $dz), $this->stepHeight);
+			}else{
+				$list = $this->getWorld()->getBlockCollisionBoxes($moveBB->addCoord($dx, $dy, $dz));
+				$stepList = null;
+			}
 
 			foreach($list as $bb){
 				$dy = $bb->calculateYOffset($moveBB, $dy);
@@ -911,27 +917,30 @@ abstract class Entity{
 
 				$stepBB = clone $this->boundingBox;
 
-				$list = $stepList;
-				foreach($list as $bb){
+				if($stepList === null){
+					throw new \LogicException("Step list is null");
+				}
+				
+				foreach($stepList as $bb){
 					$dy = $bb->calculateYOffset($stepBB, $dy);
 				}
 
 				$stepBB->offset(0, $dy, 0);
 
-				foreach($list as $bb){
+				foreach($stepList as $bb){
 					$dx = $bb->calculateXOffset($stepBB, $dx);
 				}
 
 				$stepBB->offset($dx, 0, 0);
 
-				foreach($list as $bb){
+				foreach($stepList as $bb){
 					$dz = $bb->calculateZOffset($stepBB, $dz);
 				}
 
 				$stepBB->offset(0, 0, $dz);
 
 				$reverseDY = -$dy;
-				foreach($list as $bb){
+				foreach($stepList as $bb){
 					$reverseDY = $bb->calculateYOffset($stepBB, $reverseDY);
 				}
 				$dy += $reverseDY;
