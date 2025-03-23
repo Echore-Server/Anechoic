@@ -824,9 +824,9 @@ abstract class Entity{
 	public function hasMovementUpdate() : bool{
 		return
 			$this->forceMovementUpdate
-			|| 0.0 !== floatval($this->motion->x)
-			|| 0.0 !== floatval($this->motion->y)
-			|| 0.0 !== floatval($this->motion->z)
+			|| 0.0 !== (float) ($this->motion->x)
+			|| 0.0 !== (float) ($this->motion->y)
+			|| 0.0 !== (float) ($this->motion->z)
 			|| !$this->onGround;
 	}
 
@@ -1123,7 +1123,7 @@ abstract class Entity{
 		}
 
 		$changedProperties = $this->getDirtyNetworkData();
-		if(count($changedProperties) > 0){
+		if(!empty($changedProperties)){
 			$this->sendData(null, $changedProperties);
 			$this->networkProperties->clearDirtyProperties();
 		}
