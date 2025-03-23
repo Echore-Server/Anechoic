@@ -27,7 +27,6 @@ declare(strict_types=1);
 
 namespace pocketmine\entity;
 
-use _PHPStan_d25a815b1\Symfony\Component\Console\Exception\LogicException;
 use Generator;
 use InvalidArgumentException;
 use pocketmine\block\Block;
@@ -920,7 +919,7 @@ abstract class Entity{
 				if($stepList === null){
 					throw new \LogicException("Step list is null");
 				}
-				
+
 				foreach($stepList as $bb){
 					$dy = $bb->calculateYOffset($stepBB, $dy);
 				}
