@@ -22,3 +22,4 @@
 # Major changes
 
 - Added `EventPriority::SERVER`
+- Added `EntityDamageEvent::onPostAttack`
