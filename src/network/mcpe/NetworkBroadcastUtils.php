@@ -71,7 +71,7 @@ final class NetworkBroadcastUtils{
 		foreach($packets as $pk){
 			$buffer = NetworkSession::encodePacketTimed(PacketSerializer::encoder(), $pk);
 			$bufferLen = strlen($buffer);
-			$totalLength += (((int) log($bufferLen, 128)) + 1) + $bufferLen;
+			$totalLength += 2 + $bufferLen;
 
 			// encodeRaw
 			$batchBuffer->putUnsignedVarInt($bufferLen);
