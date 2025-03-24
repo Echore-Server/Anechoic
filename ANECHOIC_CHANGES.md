@@ -1,4 +1,4 @@
-# Changes
+# Performance-related changes
 
 - Removed `Entity::checkBlockIntersections` and related properties
 - Removed `Item::onTickWorn` and related functions (such as Turtle Helmet)
@@ -18,4 +18,7 @@
 - Entities no longer broadcast motion
 - Optimized `Vector3::divide`, `Vector2::divide`
 - Optimized `Entity::move`
+
+# Major changes
+
 - Added `EventPriority::SERVER`

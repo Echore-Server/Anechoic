@@ -1253,6 +1253,8 @@ abstract class Entity{
 		$this->setLastDamageCause($source);
 
 		$this->setHealth($this->getHealth() - $source->getFinalDamage());
+		
+		$source->onPostAttack();
 	}
 
 	public function isFireProof() : bool{

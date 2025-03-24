@@ -148,6 +148,9 @@ class EntityDamageEvent extends EntityEvent implements Cancellable{
 		return max(0, $this->baseDamage + array_sum($this->modifiers));
 	}
 
+	public function onPostAttack() : void{
+	}
+
 	/**
 	 * Returns whether an entity can use armour points to reduce this type of damage.
 	 */
