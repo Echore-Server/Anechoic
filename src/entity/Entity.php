@@ -95,6 +95,7 @@ abstract class Entity{
 	private const TAG_FALL_DISTANCE = 'FallDistance'; // TAG_Float
 	private const TAG_CUSTOM_NAME = 'CustomName'; // TAG_String
 	private const TAG_CUSTOM_NAME_VISIBLE = 'CustomNameVisible'; // TAG_Byte
+	public static bool $packetBroadcasterCallEvents = true;
 	private static int $entityCount = 1;
 	public AxisAlignedBB $boundingBox;
 	public bool $onGround = false;
@@ -1078,7 +1079,7 @@ abstract class Entity{
 			// non-player entities (movement is still interpolated). Both of these are client bugs.
 			// See https://github.com/pmmp/PocketMine-MP/issues/4394
 			$this->onGround ? MoveActorAbsolutePacket::FLAG_GROUND : 0
-		)]);
+		)], self::$packetBroadcasterCallEvents);
 	}
 
 	public function getOffsetPosition(Vector3 $vector3) : Vector3{
@@ -1086,7 +1087,7 @@ abstract class Entity{
 	}
 
 	protected function broadcastMotion() : void{
-		NetworkBroadcastUtils::broadcastPackets($this->hasSpawned, [SetActorMotionPacket::create($this->id, $this->getMotion(), tick: 0)]);
+		NetworkBroadcastUtils::broadcastPackets($this->hasSpawned, [SetActorMotionPacket::create($this->id, $this->getMotion(), tick: 0)], self::$packetBroadcasterCallEvents);
 	}
 
 	public function getMotion() : Vector3{
@@ -1253,7 +1254,7 @@ abstract class Entity{
 		$this->setLastDamageCause($source);
 
 		$this->setHealth($this->getHealth() - $source->getFinalDamage());
-		
+
 		$source->onPostAttack();
 	}
 
@@ -1577,7 +1578,7 @@ abstract class Entity{
 	 * @param null|Player[] $targets
 	 */
 	public function broadcastAnimation(Animation $animation, ?array $targets = null) : void{
-		NetworkBroadcastUtils::broadcastPackets($targets ?? $this->getViewers(), $animation->encode());
+		NetworkBroadcastUtils::broadcastPackets($targets ?? $this->getViewers(), $animation->encode(), self::$packetBroadcasterCallEvents);
 	}
 
 	/**
