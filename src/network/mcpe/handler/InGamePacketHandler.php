@@ -443,7 +443,7 @@ class InGamePacketHandler extends PacketHandler{
 		}catch(ItemStackRequestProcessException $e){
 			$result = false;
 			$this->session->getLogger()->debug("ItemStackRequest #" . $request->getRequestId() . " failed: " . $e->getMessage());
-			$this->session->getLogger()->debug(implode("\n", Utils::printableExceptionInfo($e)));
+			//$this->session->getLogger()->debug(implode("\n", Utils::printableExceptionInfo($e)));
 			$this->inventoryManager->requestSyncAll();
 		}
 
