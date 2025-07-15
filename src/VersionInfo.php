@@ -80,6 +80,8 @@ final class VersionInfo{
 		return self::$gitHash;
 	}
 
+	private static ?int $buildNumber = null;
+
 	public static function BUILD_NUMBER() : int{
 		if(self::$buildNumber === null){
 			self::$buildNumber = 0;
