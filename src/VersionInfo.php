@@ -32,8 +32,8 @@ use function is_int;
 use function str_repeat;
 
 final class VersionInfo{
-	public const NAME = "Anechoic";
-	public const BASE_VERSION = "5.28.0";
+	public const NAME = "PocketMine-MP";
+	public const BASE_VERSION = "5.31.1";
 	public const ANECHOIC_VERSION = "1.3.0";
 	public const IS_DEVELOPMENT_BUILD = true;
 	public const BUILD_CHANNEL = "stable";
@@ -52,13 +52,12 @@ final class VersionInfo{
 	 * Name of the NBT tag used to store the world data version.
 	 */
 	public const TAG_WORLD_DATA_VERSION = "PMMPDataVersion"; //TAG_Long
-	private static ?string $gitHash = null;
-	private static ?int $buildNumber = null;
-	private static ?VersionString $fullVersion = null;
 
 	private function __construct(){
 		//NOOP
 	}
+
+	private static ?string $gitHash = null;
 
 	public static function GIT_HASH() : string{
 		if(self::$gitHash === null){
@@ -81,13 +80,6 @@ final class VersionInfo{
 		return self::$gitHash;
 	}
 
-	public static function VERSION() : VersionString{
-		if(self::$fullVersion === null){
-			self::$fullVersion = new VersionString(self::BASE_VERSION, self::IS_DEVELOPMENT_BUILD, self::BUILD_NUMBER());
-		}
-		return self::$fullVersion;
-	}
-
 	public static function BUILD_NUMBER() : int{
 		if(self::$buildNumber === null){
 			self::$buildNumber = 0;
@@ -102,5 +94,14 @@ final class VersionInfo{
 		}
 
 		return self::$buildNumber;
+	}
+
+	private static ?VersionString $fullVersion = null;
+
+	public static function VERSION() : VersionString{
+		if(self::$fullVersion === null){
+			self::$fullVersion = new VersionString(self::BASE_VERSION, self::IS_DEVELOPMENT_BUILD, self::BUILD_NUMBER());
+		}
+		return self::$fullVersion;
 	}
 }

@@ -34,6 +34,7 @@ use pocketmine\block\Water;
 use pocketmine\entity\animation\Animation;
 use pocketmine\event\entity\EntityDamageEvent;
 use pocketmine\event\entity\EntityDespawnEvent;
+use pocketmine\event\entity\EntityExtinguishEvent;
 use pocketmine\event\entity\EntityMotionEvent;
 use pocketmine\event\entity\EntityRegainHealthEvent;
 use pocketmine\event\entity\EntitySpawnEvent;
@@ -913,12 +914,13 @@ abstract class Entity{
 
 			$moveBB->offset(0, 0, $dz);
 
-			if($this->stepHeight > 0 && $fallingFlag && ($wantedX !== $dx || $wantedZ !== $dz)){
+			$stepHeight = $this->getStepHeight();
+			if($stepHeight > 0 && $fallingFlag && ($wantedX !== $dx || $wantedZ !== $dz)){
 				$cx = $dx;
 				$cy = $dy;
 				$cz = $dz;
 				$dx = $wantedX;
-				$dy = $this->stepHeight;
+				$dy = $stepHeight;
 				$dz = $wantedZ;
 
 				$stepBB = clone $this->boundingBox;
@@ -994,6 +996,14 @@ abstract class Entity{
 		// TODO: vehicle collision events (first we need to spawn them!)
 
 		Timings::$entityMove->stopTiming();
+	}
+
+	public function setStepHeight(float $stepHeight) : void{
+		$this->stepHeight = $stepHeight;
+	}
+
+	public function getStepHeight() : float{
+		return $this->stepHeight;
 	}
 
 	protected function checkGroundState(float $wantedX, float $wantedY, float $wantedZ, float $dx, float $dy, float $dz) : void{
@@ -1270,7 +1280,7 @@ abstract class Entity{
 
 	protected function doOnFireTick(int $tickDiff = 1) : bool{
 		if($this->isFireProof() && $this->isOnFire()){
-			$this->extinguish();
+			$this->extinguish(EntityExtinguishEvent::CAUSE_FIRE_PROOF);
 
 			return false;
 		}
@@ -1282,7 +1292,7 @@ abstract class Entity{
 		}
 
 		if(!$this->isOnFire()){
-			$this->extinguish();
+			$this->extinguish(EntityExtinguishEvent::CAUSE_TICKING);
 		}else{
 			return true;
 		}
@@ -1290,7 +1300,10 @@ abstract class Entity{
 		return false;
 	}
 
-	public function extinguish() : void{
+	public function extinguish(int $cause = EntityExtinguishEvent::CAUSE_CUSTOM) : void{
+		$ev = new EntityExtinguishEvent($this, $cause);
+		$ev->call();
+
 		$this->fireTicks = 0;
 		$this->networkPropertiesDirty = true;
 	}

@@ -95,9 +95,11 @@ use pocketmine\world\format\io\GlobalBlockStateHandlers;
 use pocketmine\world\format\io\WritableWorldProvider;
 use pocketmine\world\format\LightArray;
 use pocketmine\world\format\SubChunk;
+use pocketmine\world\generator\executor\AsyncGeneratorExecutor;
+use pocketmine\world\generator\executor\GeneratorExecutor;
+use pocketmine\world\generator\executor\GeneratorExecutorSetupParameters;
+use pocketmine\world\generator\executor\SyncGeneratorExecutor;
 use pocketmine\world\generator\GeneratorManager;
-use pocketmine\world\generator\GeneratorRegisterTask;
-use pocketmine\world\generator\GeneratorUnregisterTask;
 use pocketmine\world\generator\PopulationTask;
 use pocketmine\world\light\BlockLightUpdate;
 use pocketmine\world\light\LightPopulationTask;
@@ -185,6 +187,7 @@ class World implements ChunkManager{
 	public bool $stopTime = false;
 	public WorldTimings $timings;
 	public float $tickRateTime = 0;
+	private readonly GeneratorExecutor $generatorExecutor;
 	/**
 	 * @var Player[] entity runtime ID => Player
 	 * @phpstan-var array<int, Player>
@@ -350,92 +353,6 @@ class World implements ChunkManager{
 	private RuntimeBlockStateRegistry $blockStateRegistry;
 
 	/**
-	 * @phpstan-return ChunkPosHash
-	 */
-	public static function chunkHash(int $x, int $z) : int{
-		return morton2d_encode($x, $z);
-	}
-
-	/**
-	 * @phpstan-return BlockPosHash
-	 */
-	public static function blockHash(int $x, int $y, int $z) : int{
-		$shiftedY = $y + self::BLOCKHASH_Y_OFFSET;
-		if(($shiftedY & (~0 << self::BLOCKHASH_Y_BITS)) !== 0){
-			throw new \InvalidArgumentException("Y coordinate $y is out of range!");
-		}
-		//morton3d gives us 21 bits on each axis, but the Y axis only requires 9
-		//so we use the extra space on Y (12 bits) and add 6 extra bits from X and Z instead.
-		//if we ever need more space for Y (e.g. due to expansion), take bits from X/Z to compensate.
-		return morton3d_encode(
-			$x & self::BLOCKHASH_XZ_MASK,
-			($shiftedY /* & self::BLOCKHASH_Y_MASK */) |
-			((($x >> self::MORTON3D_BIT_SIZE) & self::BLOCKHASH_XZ_EXTRA_MASK) << self::BLOCKHASH_X_SHIFT) |
-			((($z >> self::MORTON3D_BIT_SIZE) & self::BLOCKHASH_XZ_EXTRA_MASK) << self::BLOCKHASH_Z_SHIFT),
-			$z & self::BLOCKHASH_XZ_MASK
-		);
-	}
-
-	/**
-	 * Computes a small index relative to chunk base from the given coordinates.
-	 */
-	public static function chunkBlockHash(int $x, int $y, int $z) : int{
-		return morton3d_encode($x, $y, $z);
-	}
-
-	/**
-	 * @phpstan-param BlockPosHash $hash
-	 * @phpstan-param-out int      $x
-	 * @phpstan-param-out int      $y
-	 * @phpstan-param-out int      $z
-	 */
-	public static function getBlockXYZ(int $hash, ?int &$x, ?int &$y, ?int &$z) : void{
-		[$baseX, $baseY, $baseZ] = morton3d_decode($hash);
-
-		$extraX = ((($baseY >> self::BLOCKHASH_X_SHIFT) & self::BLOCKHASH_XZ_EXTRA_MASK) << self::MORTON3D_BIT_SIZE);
-		$extraZ = ((($baseY >> self::BLOCKHASH_Z_SHIFT) & self::BLOCKHASH_XZ_EXTRA_MASK) << self::MORTON3D_BIT_SIZE);
-
-		$x = (($baseX & self::BLOCKHASH_XZ_MASK) | $extraX) << self::BLOCKHASH_XZ_SIGN_SHIFT >> self::BLOCKHASH_XZ_SIGN_SHIFT;
-		$y = ($baseY & self::BLOCKHASH_Y_MASK) - self::BLOCKHASH_Y_OFFSET;
-		$z = (($baseZ & self::BLOCKHASH_XZ_MASK) | $extraZ) << self::BLOCKHASH_XZ_SIGN_SHIFT >> self::BLOCKHASH_XZ_SIGN_SHIFT;
-	}
-
-	/**
-	 * @phpstan-param ChunkPosHash $hash
-	 * @phpstan-param-out int      $x
-	 * @phpstan-param-out int      $z
-	 */
-	public static function getXZ(int $hash, ?int &$x, ?int &$z) : void{
-		[$x, $z] = morton2d_decode($hash);
-	}
-
-	public static function getDifficultyFromString(string $str) : int{
-		switch(strtolower(trim($str))){
-			case "0":
-			case "peaceful":
-			case "p":
-				return World::DIFFICULTY_PEACEFUL;
-
-			case "1":
-			case "easy":
-			case "e":
-				return World::DIFFICULTY_EASY;
-
-			case "2":
-			case "normal":
-			case "n":
-				return World::DIFFICULTY_NORMAL;
-
-			case "3":
-			case "hard":
-			case "h":
-				return World::DIFFICULTY_HARD;
-		}
-
-		return -1;
-	}
-
-	/**
 	 * Init the default world data
 	 */
 	public function __construct(
@@ -458,7 +375,22 @@ class World implements ChunkManager{
 		$generator = GeneratorManager::getInstance()->getGenerator($this->provider->getWorldData()->getGenerator()) ??
 			throw new AssumptionFailedError("WorldManager should already have checked that the generator exists");
 		$generator->validateGeneratorOptions($this->provider->getWorldData()->getGeneratorOptions());
-		$this->generator = $generator->getGeneratorClass();
+
+		$executorSetupParameters = new GeneratorExecutorSetupParameters(
+			worldMinY: $this->minY,
+			worldMaxY: $this->maxY,
+			generatorSeed: $this->getSeed(),
+			generatorClass: $generator->getGeneratorClass(),
+			generatorSettings: $this->provider->getWorldData()->getGeneratorOptions()
+		);
+		$this->generatorExecutor = $generator->isFast() ?
+			new SyncGeneratorExecutor($executorSetupParameters) :
+			new AsyncGeneratorExecutor(
+				$this->logger,
+				$this->workerPool,
+				$executorSetupParameters,
+				$this->worldId
+			);
 		$this->chunkPopulationRequestQueue = new \SplQueue();
 		$this->addOnUnloadCallback(function() : void{
 			$this->logger->debug("Cancelling unfulfilled generation requests");
@@ -494,21 +426,17 @@ class World implements ChunkManager{
 		$this->initRandomTickBlocksFromConfig($cfg);
 
 		$this->timings = new WorldTimings($this);
-
-		$this->workerPool->addWorkerStartHook($workerStartHook = function(int $workerId) : void{
-			if(array_key_exists($workerId, $this->generatorRegisteredWorkers)){
-				$this->logger->debug("Worker $workerId with previously registered generator restarted, flagging as unregistered");
-				unset($this->generatorRegisteredWorkers[$workerId]);
-			}
-		});
-		$workerPool = $this->workerPool;
-		$this->addOnUnloadCallback(static function() use ($workerPool, $workerStartHook) : void{
-			$workerPool->removeWorkerStartHook($workerStartHook);
-		});
 	}
 
 	public function getLogger() : \Logger{
 		return $this->logger;
+	}
+
+	/**
+	 * Gets the world seed
+	 */
+	public function getSeed() : int{
+		return $this->provider->getWorldData()->getSeed();
 	}
 
 	/** @phpstan-param \Closure() : void $callback */
@@ -638,6 +566,12 @@ class World implements ChunkManager{
 		return $block;
 	}
 
+	/**
+	 * @phpstan-return ChunkPosHash
+	 */
+	public static function chunkHash(int $x, int $z) : int{
+		return morton2d_encode($x, $z);
+	}
 
 	public function isInWorld(int $x, int $y, int $z) : bool{
 		return (
@@ -647,6 +581,12 @@ class World implements ChunkManager{
 		);
 	}
 
+	/**
+	 * Computes a small index relative to chunk base from the given coordinates.
+	 */
+	public static function chunkBlockHash(int $x, int $y, int $z) : int{
+		return morton3d_encode($x, $y, $z);
+	}
 
 	private function trimBlockCache() : void{
 		$before = $this->blockCacheSize;
@@ -671,6 +611,32 @@ class World implements ChunkManager{
 		foreach($targets as $player){
 			$player->getNetworkSession()->syncWorldTime($this->time);
 		}
+	}
+
+	public static function getDifficultyFromString(string $str) : int{
+		switch(strtolower(trim($str))){
+			case "0":
+			case "peaceful":
+			case "p":
+				return World::DIFFICULTY_PEACEFUL;
+
+			case "1":
+			case "easy":
+			case "e":
+				return World::DIFFICULTY_EASY;
+
+			case "2":
+			case "normal":
+			case "n":
+				return World::DIFFICULTY_NORMAL;
+
+			case "3":
+			case "hard":
+			case "h":
+				return World::DIFFICULTY_HARD;
+		}
+
+		return -1;
 	}
 
 	public function getTickRateTime() : float{
@@ -719,7 +685,7 @@ class World implements ChunkManager{
 
 		$this->save();
 
-		$this->unregisterGenerator();
+		$this->generatorExecutor->shutdown();
 
 		$this->provider->close();
 		$this->blockCache = [];
@@ -727,6 +693,15 @@ class World implements ChunkManager{
 		$this->blockCollisionBoxCache = [];
 
 		$this->unloaded = true;
+	}
+
+	/**
+	 * @phpstan-param ChunkPosHash $hash
+	 * @phpstan-param-out int      $x
+	 * @phpstan-param-out int      $z
+	 */
+	public static function getXZ(int $hash, ?int &$x, ?int &$z) : void{
+		[$x, $z] = morton2d_decode($hash);
 	}
 
 	public function unloadChunk(int $x, int $z, bool $safe = true, bool $trySave = true) : bool{
@@ -899,15 +874,6 @@ class World implements ChunkManager{
 		}finally{
 			$this->timings->syncChunkSave->stopTiming();
 		}
-	}
-
-	public function unregisterGenerator() : void{
-		foreach($this->workerPool->getRunningWorkers() as $i){
-			if(isset($this->generatorRegisteredWorkers[$i])){
-				$this->workerPool->submitTaskToWorker(new GeneratorUnregisterTask($this), $i);
-			}
-		}
-		$this->generatorRegisteredWorkers = [];
 	}
 
 	/** @phpstan-param \Closure() : void $callback */
@@ -1177,12 +1143,48 @@ class World implements ChunkManager{
 	}
 
 	/**
+	 * @phpstan-return BlockPosHash
+	 */
+	public static function blockHash(int $x, int $y, int $z) : int{
+		$shiftedY = $y + self::BLOCKHASH_Y_OFFSET;
+		if(($shiftedY & (~0 << self::BLOCKHASH_Y_BITS)) !== 0){
+			throw new \InvalidArgumentException("Y coordinate $y is out of range!");
+		}
+		//morton3d gives us 21 bits on each axis, but the Y axis only requires 9
+		//so we use the extra space on Y (12 bits) and add 6 extra bits from X and Z instead.
+		//if we ever need more space for Y (e.g. due to expansion), take bits from X/Z to compensate.
+		return morton3d_encode(
+			$x & self::BLOCKHASH_XZ_MASK,
+			($shiftedY /* & self::BLOCKHASH_Y_MASK */) |
+			((($x >> self::MORTON3D_BIT_SIZE) & self::BLOCKHASH_XZ_EXTRA_MASK) << self::BLOCKHASH_X_SHIFT) |
+			((($z >> self::MORTON3D_BIT_SIZE) & self::BLOCKHASH_XZ_EXTRA_MASK) << self::BLOCKHASH_Z_SHIFT),
+			$z & self::BLOCKHASH_XZ_MASK
+		);
+	}
+
+	/**
 	 * Returns whether the given position is in a loaded area of terrain.
 	 */
 	public function isInLoadedTerrain(Vector3 $pos) : bool{
 		return $this->isChunkLoaded($pos->getFloorX() >> Chunk::COORD_BIT_SIZE, $pos->getFloorZ() >> Chunk::COORD_BIT_SIZE);
 	}
 
+	/**
+	 * @phpstan-param BlockPosHash $hash
+	 * @phpstan-param-out int      $x
+	 * @phpstan-param-out int      $y
+	 * @phpstan-param-out int      $z
+	 */
+	public static function getBlockXYZ(int $hash, ?int &$x, ?int &$y, ?int &$z) : void{
+		[$baseX, $baseY, $baseZ] = morton3d_decode($hash);
+
+		$extraX = ((($baseY >> self::BLOCKHASH_X_SHIFT) & self::BLOCKHASH_XZ_EXTRA_MASK) << self::MORTON3D_BIT_SIZE);
+		$extraZ = ((($baseY >> self::BLOCKHASH_Z_SHIFT) & self::BLOCKHASH_XZ_EXTRA_MASK) << self::MORTON3D_BIT_SIZE);
+
+		$x = (($baseX & self::BLOCKHASH_XZ_MASK) | $extraX) << self::BLOCKHASH_XZ_SIGN_SHIFT >> self::BLOCKHASH_XZ_SIGN_SHIFT;
+		$y = ($baseY & self::BLOCKHASH_Y_MASK) - self::BLOCKHASH_Y_OFFSET;
+		$z = (($baseZ & self::BLOCKHASH_XZ_MASK) | $extraZ) << self::BLOCKHASH_XZ_SIGN_SHIFT >> self::BLOCKHASH_XZ_SIGN_SHIFT;
+	}
 
 	/**
 	 * Returns all entities whose bounding boxes intersect the given bounding box, excluding the given entity.
@@ -1526,6 +1528,7 @@ class World implements ChunkManager{
 		if(count($chunkData->getEntityNBT()) !== 0){
 			$this->timings->syncChunkLoadEntities->startTiming();
 			$entityFactory = EntityFactory::getInstance();
+			$deletedEntities = [];
 			foreach($chunkData->getEntityNBT() as $k => $nbt){
 				try{
 					$entity = $entityFactory->createFromData($this, $nbt);
@@ -1542,18 +1545,22 @@ class World implements ChunkManager{
 					}elseif($saveIdTag instanceof IntTag){ //legacy MCPE format
 						$saveId = "legacy(" . $saveIdTag->getValue() . ")";
 					}
-					$logger->warning("Deleted unknown entity type $saveId");
+					$deletedEntities[$saveId] = ($deletedEntities[$saveId] ?? 0) + 1;
 				}
 				//TODO: we can't prevent entities getting added to unloaded chunks if they were saved in the wrong place
 				//here, because entities currently add themselves to the world
 			}
 
+			foreach(Utils::promoteKeys($deletedEntities) as $saveId => $count){
+				$logger->warning("Deleted unknown entity type $saveId x$count");
+			}
 			$this->timings->syncChunkLoadEntities->stopTiming();
 		}
 
 		if(count($chunkData->getTileNBT()) !== 0){
 			$this->timings->syncChunkLoadTileEntities->startTiming();
 			$tileFactory = TileFactory::getInstance();
+			$deletedTiles = [];
 			foreach($chunkData->getTileNBT() as $k => $nbt){
 				try{
 					$tile = $tileFactory->createFromData($this, $nbt);
@@ -1563,7 +1570,8 @@ class World implements ChunkManager{
 					continue;
 				}
 				if($tile === null){
-					$logger->warning("Deleted unknown tile entity type " . $nbt->getString("id", "<unknown>"));
+					$saveId = $nbt->getString("id", "<unknown>");
+					$deletedTiles[$saveId] = ($deletedTiles[$saveId] ?? 0) + 1;
 					continue;
 				}
 
@@ -1577,6 +1585,10 @@ class World implements ChunkManager{
 				}else{
 					$this->addTile($tile);
 				}
+			}
+
+			foreach(Utils::promoteKeys($deletedTiles) as $saveId => $count){
+				$logger->warning("Deleted unknown tile entity type $saveId x$count");
 			}
 
 			$this->timings->syncChunkLoadTileEntities->stopTiming();
@@ -1607,6 +1619,9 @@ class World implements ChunkManager{
 		}
 		if(!$this->isInWorld($pos->getFloorX(), $pos->getFloorY(), $pos->getFloorZ())){
 			throw new \InvalidArgumentException("Tile position is outside the world bounds");
+		}
+		if(!TileFactory::getInstance()->isRegistered($tile::class)){
+			throw new \LogicException("Tile " . $tile::class . " is not registered for a save ID in TileFactory");
 		}
 
 		$chunkX = $pos->getFloorX() >> Chunk::COORD_BIT_SIZE;
@@ -1828,6 +1843,7 @@ class World implements ChunkManager{
 			}
 		}
 	}
+
 	/**
 	 * @return mixed[]
 	 */
@@ -1935,7 +1951,7 @@ class World implements ChunkManager{
 	}
 
 	/**
-	 * @param int[]                   $collisionInfo
+	 * @param int[] $collisionInfo
 	 *
 	 * @phpstan-param array<int, int> $collisionInfo
 	 */
@@ -1998,7 +2014,7 @@ class World implements ChunkManager{
 	 * This checks a padding of 1 block around the coordinates to account for oversized AABBs of blocks like fences.
 	 * Larger AABBs (>= 2 blocks on any axis) are not accounted for.
 	 *
-	 * @param int[]                   $collisionInfo
+	 * @param int[] $collisionInfo
 	 *
 	 * @phpstan-param array<int, int> $collisionInfo
 	 *
@@ -2208,26 +2224,6 @@ class World implements ChunkManager{
 		return 0; //TODO: this should probably throw instead (light not calculated yet)
 	}
 
-	public function updateAllLight(int $x, int $y, int $z) : void{
-		if(($chunk = $this->getChunk($x >> Chunk::COORD_BIT_SIZE, $z >> Chunk::COORD_BIT_SIZE)) === null || $chunk->isLightPopulated() !== true){
-			return;
-		}
-
-		$blockFactory = $this->blockStateRegistry;
-		$this->timings->doBlockSkyLightUpdates->startTiming();
-		if($this->skyLightUpdate === null){
-			$this->skyLightUpdate = new SkyLightUpdate(new SubChunkExplorer($this), $blockFactory->lightFilter, $blockFactory->blocksDirectSkyLight);
-		}
-		$this->skyLightUpdate->recalculateNode($x, $y, $z);
-		$this->timings->doBlockSkyLightUpdates->stopTiming();
-
-		$this->timings->doBlockLightUpdates->startTiming();
-		if($this->blockLightUpdate === null){
-			$this->blockLightUpdate = new BlockLightUpdate(new SubChunkExplorer($this), $blockFactory->lightFilter, $blockFactory->light);
-		}
-		$this->blockLightUpdate->recalculateNode($x, $y, $z);
-		$this->timings->doBlockLightUpdates->stopTiming();
-	}
 	/**
 	 * Returns the highest level of any type of light at, or adjacent to, the given coordinates, adjusted for the
 	 * current weather and time of day.
@@ -2333,6 +2329,15 @@ class World implements ChunkManager{
 			throw new WorldException("Cannot set a block in un-generated terrain");
 		}
 
+		//TODO: this computes state ID twice (we do it again in writeStateToWorld()). Not great for performance :(
+		$stateId = $block->getStateId();
+		if(!$this->blockStateRegistry->hasStateId($stateId)){
+			throw new \LogicException("Block state ID not known to RuntimeBlockStateRegistry (probably not registered)");
+		}
+		if(!GlobalBlockStateHandlers::getSerializer()->isRegistered($block)){
+			throw new \LogicException("Block not registered with GlobalBlockStateHandlers serializer");
+		}
+
 		$this->timings->setBlock->startTiming();
 
 		$this->unlockChunk($chunkX, $chunkZ, null);
@@ -2392,6 +2397,26 @@ class World implements ChunkManager{
 		return false;
 	}
 
+	public function updateAllLight(int $x, int $y, int $z) : void{
+		if(($chunk = $this->getChunk($x >> Chunk::COORD_BIT_SIZE, $z >> Chunk::COORD_BIT_SIZE)) === null || $chunk->isLightPopulated() !== true){
+			return;
+		}
+
+		$blockFactory = $this->blockStateRegistry;
+		$this->timings->doBlockSkyLightUpdates->startTiming();
+		if($this->skyLightUpdate === null){
+			$this->skyLightUpdate = new SkyLightUpdate(new SubChunkExplorer($this), $blockFactory->lightFilter, $blockFactory->blocksDirectSkyLight);
+		}
+		$this->skyLightUpdate->recalculateNode($x, $y, $z);
+		$this->timings->doBlockSkyLightUpdates->stopTiming();
+
+		$this->timings->doBlockLightUpdates->startTiming();
+		if($this->blockLightUpdate === null){
+			$this->blockLightUpdate = new BlockLightUpdate(new SubChunkExplorer($this), $blockFactory->lightFilter, $blockFactory->light);
+		}
+		$this->blockLightUpdate->recalculateNode($x, $y, $z);
+		$this->timings->doBlockLightUpdates->stopTiming();
+	}
 
 	/**
 	 * Tries to break a block using a item, including Player time checks if available
@@ -2869,124 +2894,6 @@ class World implements ChunkManager{
 	}
 
 	/**
-	 * Returns the chunk containing the given Vector3 position.
-	 */
-	public function getOrLoadChunkAtPosition(Vector3 $pos) : ?Chunk{
-		return $this->loadChunk($pos->getFloorX() >> Chunk::COORD_BIT_SIZE, $pos->getFloorZ() >> Chunk::COORD_BIT_SIZE);
-	}
-
-	/**
-	 * Returns the chunks adjacent to the specified chunk.
-	 *
-	 * @return Chunk[]|null[] chunkHash => Chunk|null
-	 * @phpstan-return array<ChunkPosHash, Chunk|null>
-	 */
-	public function getAdjacentChunks(int $x, int $z) : array{
-		$result = [];
-		for($xx = -1; $xx <= 1; ++$xx){
-			for($zz = -1; $zz <= 1; ++$zz){
-				if($xx === 0 && $zz === 0){
-					continue; //center chunk
-				}
-				$result[World::chunkHash($xx, $zz)] = $this->loadChunk($x + $xx, $z + $zz);
-			}
-		}
-
-		return $result;
-	}
-
-	/**
-	 * Flags a chunk as locked, usually for async modification.
-	 *
-	 * This is an **advisory lock**. This means that the lock does **not** prevent the chunk from being modified on the
-	 * main thread, such as by setBlock() or setBiomeId(). However, you can use it to detect when such modifications
-	 * have taken place - unlockChunk() with the same lockID will fail and return false if this happens.
-	 *
-	 * This is used internally by the generation system to ensure that two PopulationTasks don't try to modify the same
-	 * chunk at the same time. Generation will respect these locks and won't try to do generation of chunks over which
-	 * a lock is held.
-	 *
-	 * WARNING: Be sure to release all locks once you're done with them, or you WILL have problems with terrain not
-	 * being generated.
-	 */
-	public function lockChunk(int $chunkX, int $chunkZ, ChunkLockId $lockId) : void{
-		$chunkHash = World::chunkHash($chunkX, $chunkZ);
-		if(isset($this->chunkLock[$chunkHash])){
-			throw new \InvalidArgumentException("Chunk $chunkX $chunkZ is already locked");
-		}
-		$this->chunkLock[$chunkHash] = $lockId;
-		$this->markTickingChunkForRecheck($chunkX, $chunkZ);
-	}
-
-	public function setChunk(int $chunkX, int $chunkZ, Chunk $chunk) : void{
-		$chunkHash = World::chunkHash($chunkX, $chunkZ);
-		$oldChunk = $this->loadChunk($chunkX, $chunkZ);
-		if($oldChunk !== null && $oldChunk !== $chunk){
-			$deletedTiles = 0;
-			$transferredTiles = 0;
-			foreach($oldChunk->getTiles() as $oldTile){
-				$tilePosition = $oldTile->getPosition();
-				$localX = $tilePosition->getFloorX() & Chunk::COORD_MASK;
-				$localY = $tilePosition->getFloorY();
-				$localZ = $tilePosition->getFloorZ() & Chunk::COORD_MASK;
-
-				$newBlock = $this->blockStateRegistry->fromStateId($chunk->getBlockStateId($localX, $localY, $localZ));
-				$expectedTileClass = $newBlock->getIdInfo()->getTileClass();
-				if(
-					$expectedTileClass === null || //new block doesn't expect a tile
-					!($oldTile instanceof $expectedTileClass) || //new block expects a different tile
-					(($newTile = $chunk->getTile($localX, $localY, $localZ)) !== null && $newTile !== $oldTile) //new chunk already has a different tile
-				){
-					$oldTile->close();
-					$deletedTiles++;
-				}else{
-					$transferredTiles++;
-					$chunk->addTile($oldTile);
-					$oldChunk->removeTile($oldTile);
-				}
-			}
-			if($deletedTiles > 0 || $transferredTiles > 0){
-				$this->logger->debug("Replacement of chunk $chunkX $chunkZ caused deletion of $deletedTiles obsolete/conflicted tiles, and transfer of $transferredTiles");
-			}
-		}
-
-		$this->chunks[$chunkHash] = $chunk;
-
-		$this->blockCacheSize -= count($this->blockCache[$chunkHash] ?? []);
-		unset($this->blockCache[$chunkHash]);
-		unset($this->blockCollisionBoxCache[$chunkHash]);
-		unset($this->changedBlocks[$chunkHash]);
-		$chunk->setTerrainDirty();
-		$this->markTickingChunkForRecheck($chunkX, $chunkZ); //this replacement chunk may not meet the conditions for ticking
-
-		if(!$this->isChunkInUse($chunkX, $chunkZ)){
-			$this->unloadChunkRequest($chunkX, $chunkZ);
-		}
-
-		if($oldChunk === null){
-			if(ChunkLoadEvent::hasHandlers()){
-				(new ChunkLoadEvent($this, $chunkX, $chunkZ, $chunk, true))->call();
-			}
-
-			foreach($this->getChunkListeners($chunkX, $chunkZ) as $listener){
-				$listener->onChunkLoaded($chunkX, $chunkZ, $chunk);
-			}
-		}else{
-			foreach($this->getChunkListeners($chunkX, $chunkZ) as $listener){
-				$listener->onChunkChanged($chunkX, $chunkZ, $chunk);
-			}
-		}
-
-		for($cX = -1; $cX <= 1; ++$cX){
-			for($cZ = -1; $cZ <= 1; ++$cZ){
-				foreach($this->getChunkEntities($chunkX + $cX, $chunkZ + $cZ) as $entity){
-					$entity->onNearbyBlockChange();
-				}
-			}
-		}
-	}
-
-	/**
 	 * Gets the highest block Y value at a specific $x and $z
 	 *
 	 * @return int|null 0-255, or null if the column is empty
@@ -3038,6 +2945,11 @@ class World implements ChunkManager{
 			}else{
 				throw new AssumptionFailedError("Found two different entities sharing entity ID " . $entity->getId());
 			}
+		}
+		if(!EntityFactory::getInstance()->isRegistered($entity::class) && !$entity instanceof Player){
+			//canSaveWithChunk is mutable, so that means it could be toggled after adding the entity and cause a crash
+			//later on. Better we just force all entities to have a save ID, even if it might not be needed.
+			throw new \LogicException("Entity " . $entity::class . " is not registered for a save ID in EntityFactory");
 		}
 		$pos = $entity->getPosition()->asVector3();
 		$this->entitiesByChunk[World::chunkHash($pos->getFloorX() >> Chunk::COORD_BIT_SIZE, $pos->getFloorZ() >> Chunk::COORD_BIT_SIZE)][$entity->getId()] = $entity;
@@ -3313,8 +3225,7 @@ class World implements ChunkManager{
 
 			$centerChunk = $this->loadChunk($chunkX, $chunkZ);
 			$adjacentChunks = $this->getAdjacentChunks($chunkX, $chunkZ);
-			$task = new PopulationTask(
-				$this->worldId,
+			$this->generatorExecutor->populate(
 				$chunkX,
 				$chunkZ,
 				$centerChunk,
@@ -3327,22 +3238,54 @@ class World implements ChunkManager{
 					$this->generateChunkCallback($chunkPopulationLockId, $chunkX, $chunkZ, $centerChunk, $adjacentChunks, $temporaryChunkLoader);
 				}
 			);
-			$workerId = $this->workerPool->selectWorker();
-			if(!isset($this->workerPool->getRunningWorkers()[$workerId]) && isset($this->generatorRegisteredWorkers[$workerId])){
-				$this->logger->debug("Selected worker $workerId previously had generator registered, but is now offline");
-				unset($this->generatorRegisteredWorkers[$workerId]);
-			}
-			if(!isset($this->generatorRegisteredWorkers[$workerId])){
-				$this->registerGeneratorToWorker($workerId);
-			}
-			$this->workerPool->submitTaskToWorker($task, $workerId);
-
 			return $resolver->getPromise();
 		}finally{
 			$timings->stopTiming();
 		}
 	}
 
+	/**
+	 * Flags a chunk as locked, usually for async modification.
+	 *
+	 * This is an **advisory lock**. This means that the lock does **not** prevent the chunk from being modified on the
+	 * main thread, such as by setBlock() or setBiomeId(). However, you can use it to detect when such modifications
+	 * have taken place - unlockChunk() with the same lockID will fail and return false if this happens.
+	 *
+	 * This is used internally by the generation system to ensure that two PopulationTasks don't try to modify the same
+	 * chunk at the same time. Generation will respect these locks and won't try to do generation of chunks over which
+	 * a lock is held.
+	 *
+	 * WARNING: Be sure to release all locks once you're done with them, or you WILL have problems with terrain not
+	 * being generated.
+	 */
+	public function lockChunk(int $chunkX, int $chunkZ, ChunkLockId $lockId) : void{
+		$chunkHash = World::chunkHash($chunkX, $chunkZ);
+		if(isset($this->chunkLock[$chunkHash])){
+			throw new \InvalidArgumentException("Chunk $chunkX $chunkZ is already locked");
+		}
+		$this->chunkLock[$chunkHash] = $lockId;
+		$this->markTickingChunkForRecheck($chunkX, $chunkZ);
+	}
+
+	/**
+	 * Returns the chunks adjacent to the specified chunk.
+	 *
+	 * @return Chunk[]|null[] chunkHash => Chunk|null
+	 * @phpstan-return array<ChunkPosHash, Chunk|null>
+	 */
+	public function getAdjacentChunks(int $x, int $z) : array{
+		$result = [];
+		for($xx = -1; $xx <= 1; ++$xx){
+			for($zz = -1; $zz <= 1; ++$zz){
+				if($xx === 0 && $zz === 0){
+					continue; //center chunk
+				}
+				$result[World::chunkHash($xx, $zz)] = $this->loadChunk($x + $xx, $z + $zz);
+			}
+		}
+
+		return $result;
+	}
 
 	public function isLoaded() : bool{
 		return !$this->unloaded;
@@ -3429,6 +3372,74 @@ class World implements ChunkManager{
 		$timings->stopTiming();
 	}
 
+	public function setChunk(int $chunkX, int $chunkZ, Chunk $chunk) : void{
+		$chunkHash = World::chunkHash($chunkX, $chunkZ);
+		$oldChunk = $this->loadChunk($chunkX, $chunkZ);
+		if($oldChunk !== null && $oldChunk !== $chunk){
+			$deletedTiles = 0;
+			$transferredTiles = 0;
+			foreach($oldChunk->getTiles() as $oldTile){
+				$tilePosition = $oldTile->getPosition();
+				$localX = $tilePosition->getFloorX() & Chunk::COORD_MASK;
+				$localY = $tilePosition->getFloorY();
+				$localZ = $tilePosition->getFloorZ() & Chunk::COORD_MASK;
+
+				$newBlock = $this->blockStateRegistry->fromStateId($chunk->getBlockStateId($localX, $localY, $localZ));
+				$expectedTileClass = $newBlock->getIdInfo()->getTileClass();
+				if(
+					$expectedTileClass === null || //new block doesn't expect a tile
+					!($oldTile instanceof $expectedTileClass) || //new block expects a different tile
+					(($newTile = $chunk->getTile($localX, $localY, $localZ)) !== null && $newTile !== $oldTile) //new chunk already has a different tile
+				){
+					$oldTile->close();
+					$deletedTiles++;
+				}else{
+					$transferredTiles++;
+					$chunk->addTile($oldTile);
+					$oldChunk->removeTile($oldTile);
+				}
+			}
+			if($deletedTiles > 0 || $transferredTiles > 0){
+				$this->logger->debug("Replacement of chunk $chunkX $chunkZ caused deletion of $deletedTiles obsolete/conflicted tiles, and transfer of $transferredTiles");
+			}
+		}
+
+		$this->chunks[$chunkHash] = $chunk;
+
+		$this->blockCacheSize -= count($this->blockCache[$chunkHash] ?? []);
+		unset($this->blockCache[$chunkHash]);
+		unset($this->blockCollisionBoxCache[$chunkHash]);
+		unset($this->changedBlocks[$chunkHash]);
+		$chunk->setTerrainDirty();
+		$this->markTickingChunkForRecheck($chunkX, $chunkZ); //this replacement chunk may not meet the conditions for ticking
+
+		if(!$this->isChunkInUse($chunkX, $chunkZ)){
+			$this->unloadChunkRequest($chunkX, $chunkZ);
+		}
+
+		if($oldChunk === null){
+			if(ChunkLoadEvent::hasHandlers()){
+				(new ChunkLoadEvent($this, $chunkX, $chunkZ, $chunk, true))->call();
+			}
+
+			foreach($this->getChunkListeners($chunkX, $chunkZ) as $listener){
+				$listener->onChunkLoaded($chunkX, $chunkZ, $chunk);
+			}
+		}else{
+			foreach($this->getChunkListeners($chunkX, $chunkZ) as $listener){
+				$listener->onChunkChanged($chunkX, $chunkZ, $chunk);
+			}
+		}
+
+		for($cX = -1; $cX <= 1; ++$cX){
+			for($cZ = -1; $cZ <= 1; ++$cZ){
+				foreach($this->getChunkEntities($chunkX + $cX, $chunkZ + $cZ) as $entity){
+					$entity->onNearbyBlockChange();
+				}
+			}
+		}
+	}
+
 	/**
 	 * @throws \InvalidArgumentException
 	 * @internal Tiles are now bound with blocks, and their removal is automatic. They should not be directly removed.
@@ -3493,12 +3504,6 @@ class World implements ChunkManager{
 		return $this->internalOrderChunkPopulation($chunkX, $chunkZ, $associatedChunkLoader, $resolver);
 	}
 
-	public function registerGeneratorToWorker(int $worker) : void{
-		$this->logger->debug("Registering generator on worker $worker");
-		$this->workerPool->submitTaskToWorker(new GeneratorRegisterTask($this, $this->generator, $this->provider->getWorldData()->getGeneratorOptions()), $worker);
-		$this->generatorRegisteredWorkers[$worker] = true;
-	}
-
 	/**
 	 * Returns a safe spawn position near the given position, or near the world's spawn position if not provided.
 	 * This function will throw an exception if the terrain is not already generated in advance.
@@ -3544,6 +3549,12 @@ class World implements ChunkManager{
 		return new Position($spawn->x, $y, $spawn->z, $this);
 	}
 
+	/**
+	 * Returns the chunk containing the given Vector3 position.
+	 */
+	public function getOrLoadChunkAtPosition(Vector3 $pos) : ?Chunk{
+		return $this->loadChunk($pos->getFloorX() >> Chunk::COORD_BIT_SIZE, $pos->getFloorZ() >> Chunk::COORD_BIT_SIZE);
+	}
 
 	/**
 	 * Returns the World display name.
@@ -3584,13 +3595,6 @@ class World implements ChunkManager{
 	public function startTime() : void{
 		$this->stopTime = false;
 		$this->sendTime();
-	}
-
-	/**
-	 * Gets the world seed
-	 */
-	public function getSeed() : int{
-		return $this->provider->getWorldData()->getSeed();
 	}
 
 	public function getMinY() : int{
