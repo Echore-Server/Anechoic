@@ -131,7 +131,7 @@
             "dist": {
                 "type": "path",
                 "url": "../BedrockProtocol",
-                "reference": "0f3a7e9ea10bba58ffd4e06ea13411ed1b0a2606"
+                "reference": "bcf4ba30a8c57f4f902936135936383b17902b04"
             },
             "require": {
                 "echore/math": "^0.3.0 || ^0.4.0 || ^1.0.0",
