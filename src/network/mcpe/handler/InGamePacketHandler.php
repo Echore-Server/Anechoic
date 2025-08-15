@@ -246,7 +246,7 @@ class InGamePacketHandler extends PacketHandler{
 		if(!$this->forceMoveSync && $hasMoved){
 			$this->lastPlayerAuthInputPosition = $rawPos;
 			//TODO: this packet has WAYYYYY more useful information that we're not using
-			$this->player->handleMovement($newPos);
+			$this->player->handleMovementFromNetwork($newPos, $packet);
 		}
 
 		$packetHandled = true;
