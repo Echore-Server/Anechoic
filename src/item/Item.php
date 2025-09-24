@@ -51,6 +51,7 @@ use pocketmine\nbt\tag\StringTag;
 use pocketmine\nbt\TreeRoot;
 use pocketmine\player\Player;
 use pocketmine\utils\Utils;
+use pocketmine\world\BlockTransaction;
 use pocketmine\world\format\io\GlobalItemDataHandlers;
 use TypeError;
 use function base64_decode;
@@ -431,6 +432,20 @@ class Item implements JsonSerializable{
 
 	final public function canBePlaced() : bool{
 		return $this->getBlock()->canBePlaced();
+	}
+
+	protected final function tryPlacementTransaction(Block $blockPlace, Block $blockReplace, Block $blockClicked, int $face, Vector3 $clickVector, ?Player $player) : ?BlockTransaction{
+		$position = $blockReplace->getPosition();
+		$blockPlace->position($position->getWorld(), $position->getFloorX(), $position->getFloorY(), $position->getFloorZ());
+		if(!$blockPlace->canBePlacedAt($blockReplace, $clickVector, $face, $blockReplace->getPosition()->equals($blockClicked->getPosition()))){
+			return null;
+		}
+		$transaction = new BlockTransaction($position->getWorld());
+		return $blockPlace->place($transaction, $this, $blockReplace, $blockClicked, $face, $clickVector, $player) ? $transaction : null;
+	}
+
+	public function getPlacementTransaction(Block $blockReplace, Block $blockClicked, int $face, Vector3 $clickVector, ?Player $player = null) : ?BlockTransaction{
+		return $this->tryPlacementTransaction($this->getBlock($face), $blockReplace, $blockClicked, $face, $clickVector, $player);
 	}
 
 	/**

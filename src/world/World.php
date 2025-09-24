@@ -353,6 +353,12 @@ class World implements ChunkManager{
 	private RuntimeBlockStateRegistry $blockStateRegistry;
 
 	/**
+	 * @var true[]
+	 * @phpstan-var array<ChunkPosHash, true>
+	 */
+	private array $knownUngeneratedChunks = [];
+
+	/**
 	 * Init the default world data
 	 */
 	public function __construct(
@@ -668,6 +674,7 @@ class World implements ChunkManager{
 			self::getXZ($chunkHash, $chunkX, $chunkZ);
 			$this->unloadChunk($chunkX, $chunkZ, false);
 		}
+		$this->knownUngeneratedChunks = [];
 		foreach($this->entitiesByChunk as $chunkHash => $entities){
 			self::getXZ($chunkHash, $chunkX, $chunkZ);
 
@@ -1464,6 +1471,10 @@ class World implements ChunkManager{
 			return $this->chunks[$chunkHash];
 		}
 
+		if(isset($this->knownUngeneratedChunks[$chunkHash])){
+			return null;
+		}
+
 		$this->timings->syncChunkLoad->startTiming();
 
 		$this->cancelUnloadChunkRequest($x, $z);
@@ -1482,6 +1493,8 @@ class World implements ChunkManager{
 
 		if($loadedChunkData === null){
 			$this->timings->syncChunkLoad->stopTiming();
+			$this->knownUngeneratedChunks[$chunkHash] = true;
+
 			return null;
 		}
 
@@ -1498,7 +1511,7 @@ class World implements ChunkManager{
 		unset($this->blockCache[$chunkHash]);
 		unset($this->blockCollisionBoxCache[$chunkHash]);
 
-		$this->initChunk($x, $z, $chunkData);
+		$this->initChunk($x, $z, $chunkData, $chunk);
 
 		if(ChunkLoadEvent::hasHandlers()){
 			(new ChunkLoadEvent($this, $x, $z, $this->chunks[$chunkHash], false))->call();
@@ -1522,7 +1535,7 @@ class World implements ChunkManager{
 		unset($this->unloadQueue[World::chunkHash($x, $z)]);
 	}
 
-	private function initChunk(int $chunkX, int $chunkZ, ChunkData $chunkData) : void{
+	private function initChunk(int $chunkX, int $chunkZ, ChunkData $chunkData, Chunk $chunk) : void{
 		$logger = new \PrefixedLogger($this->logger, "Loading chunk $chunkX $chunkZ");
 
 		if(count($chunkData->getEntityNBT()) !== 0){
@@ -1584,6 +1597,17 @@ class World implements ChunkManager{
 					$logger->error("Cannot add tile at x=$tilePosition->x,y=$tilePosition->y,z=$tilePosition->z: Another tile is already at that position");
 				}else{
 					$this->addTile($tile);
+				}
+
+				$expectedStateId = $chunk->getBlockStateId($tilePosition->getFloorX() & Chunk::COORD_MASK, $tilePosition->getFloorY(), $tilePosition->getFloorZ() & Chunk::COORD_MASK);
+				$actualStateId = $this->getBlock($tilePosition)->getStateId();
+				if($expectedStateId !== $actualStateId){
+					//state ID was updated by readStateFromWorld - typically because the block pulled some data from the tile
+					//make sure this is synced to the chunk
+					//TODO: in the future we should pull tile reading logic out of readStateFromWorld() and do it only
+					//when the tile is loaded - this would be cleaner and faster
+					$chunk->setBlockStateId($tilePosition->getFloorX() & Chunk::COORD_MASK, $tilePosition->getFloorY(), $tilePosition->getFloorZ() & Chunk::COORD_MASK, $actualStateId);
+					$this->logger->debug("Tile " . $tile::class . " at x=$tilePosition->x,y=$tilePosition->y,z=$tilePosition->z updated block state ID from $expectedStateId to $actualStateId");
 				}
 			}
 
@@ -2695,22 +2719,14 @@ class World implements ChunkManager{
 		if($item->isNull() || !$item->canBePlaced()){
 			return false;
 		}
-		$hand = $item->getBlock($face);
-		$hand->position($this, $blockReplace->getPosition()->x, $blockReplace->getPosition()->y, $blockReplace->getPosition()->z);
-
-		if($hand->canBePlacedAt($blockClicked, $clickVector, $face, true)){
-			$blockReplace = $blockClicked;
-			//TODO: while this mimics the vanilla behaviour with replaceable blocks, we should really pass some other
-			//value like NULL and let place() deal with it. This will look like a bug to anyone who doesn't know about
-			//the vanilla behaviour.
-			$face = Facing::UP;
-			$hand->position($this, $blockReplace->getPosition()->x, $blockReplace->getPosition()->y, $blockReplace->getPosition()->z);
-		}elseif(!$hand->canBePlacedAt($blockReplace, $clickVector, $face, false)){
-			return false;
-		}
-
-		$tx = new BlockTransaction($this);
-		if(!$hand->place($tx, $item, $blockReplace, $blockClicked, $face, $clickVector, $player)){
+		//TODO: while passing Facing::UP mimics the vanilla behaviour with replaceable blocks, we should really pass
+		//some other value like NULL and let place() deal with it. This will look like a bug to anyone who doesn't know
+		//about the vanilla behaviour.
+		$tx =
+			$item->getPlacementTransaction($blockClicked, $blockClicked, Facing::UP, $clickVector, $player) ??
+			$item->getPlacementTransaction($blockReplace, $blockClicked, $face, $clickVector, $player);
+		if($tx === null){
+			//no placement options available
 			return false;
 		}
 
@@ -2754,6 +2770,7 @@ class World implements ChunkManager{
 		if(!$tx->apply()){
 			return false;
 		}
+		$first = true;
 		foreach($tx->getBlocks() as [$x, $y, $z, $_]){
 			$tile = $this->getTileAt($x, $y, $z);
 			if($tile !== null){
@@ -2761,11 +2778,12 @@ class World implements ChunkManager{
 				$tile->copyDataFromItem($item);
 			}
 
-			$this->getBlockAt($x, $y, $z)->onPostPlace();
-		}
-
-		if($playSound){
-			$this->addSound($hand->getPosition(), new BlockPlaceSound($hand));
+			$placed = $this->getBlockAt($x, $y, $z);
+			$placed->onPostPlace();
+			if($first && $playSound){
+				$this->addSound($placed->getPosition(), new BlockPlaceSound($placed));
+			}
+			$first = false;
 		}
 
 		$item->pop();
@@ -3368,6 +3386,16 @@ class World implements ChunkManager{
 	}
 
 	public function setChunk(int $chunkX, int $chunkZ, Chunk $chunk) : void{
+		foreach($chunk->getSubChunks() as $subChunk){
+			foreach($subChunk->getBlockLayers() as $blockLayer){
+				foreach($blockLayer->getPalette() as $blockStateId){
+					if(!$this->blockStateRegistry->hasStateId($blockStateId)){
+						throw new \InvalidArgumentException("Provided chunk contains unknown/unregistered blocks (found unknown state ID $blockStateId)");
+					}
+				}
+			}
+		}
+
 		$chunkHash = World::chunkHash($chunkX, $chunkZ);
 		$oldChunk = $this->loadChunk($chunkX, $chunkZ);
 		if($oldChunk !== null && $oldChunk !== $chunk){
@@ -3400,6 +3428,7 @@ class World implements ChunkManager{
 		}
 
 		$this->chunks[$chunkHash] = $chunk;
+		unset($this->knownUngeneratedChunks[$chunkHash]);
 
 		$this->blockCacheSize -= count($this->blockCache[$chunkHash] ?? []);
 		unset($this->blockCache[$chunkHash]);

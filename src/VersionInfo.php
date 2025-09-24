@@ -23,8 +23,6 @@ declare(strict_types=1);
 
 namespace pocketmine;
 
-use Phar;
-use PharData;
 use pocketmine\utils\Git;
 use pocketmine\utils\VersionString;
 use function is_array;
@@ -33,8 +31,7 @@ use function str_repeat;
 
 final class VersionInfo{
 	public const NAME = "PocketMine-MP";
-	public const BASE_VERSION = "5.32.2";
-	public const ANECHOIC_VERSION = "1.3.0";
+	public const BASE_VERSION = "5.33.3";
 	public const IS_DEVELOPMENT_BUILD = true;
 	public const BUILD_CHANNEL = "stable";
 
@@ -63,11 +60,11 @@ final class VersionInfo{
 		if(self::$gitHash === null){
 			$gitHash = str_repeat("00", 20);
 
-			if(Phar::running(true) === ""){
-				$gitHash = Git::getRepositoryStatePretty(PATH);
+			if(\Phar::running(true) === ""){
+				$gitHash = Git::getRepositoryStatePretty(\pocketmine\PATH);
 			}else{
-				$pharPath = Phar::running(false);
-				$phar = Phar::isValidPharFilename($pharPath) ? new Phar($pharPath) : new PharData($pharPath);
+				$pharPath = \Phar::running(false);
+				$phar = \Phar::isValidPharFilename($pharPath) ? new \Phar($pharPath) : new \PharData($pharPath);
 				$meta = $phar->getMetadata();
 				if(isset($meta["git"])){
 					$gitHash = $meta["git"];
@@ -85,9 +82,9 @@ final class VersionInfo{
 	public static function BUILD_NUMBER() : int{
 		if(self::$buildNumber === null){
 			self::$buildNumber = 0;
-			if(Phar::running(true) !== ""){
-				$pharPath = Phar::running(false);
-				$phar = Phar::isValidPharFilename($pharPath) ? new Phar($pharPath) : new PharData($pharPath);
+			if(\Phar::running(true) !== ""){
+				$pharPath = \Phar::running(false);
+				$phar = \Phar::isValidPharFilename($pharPath) ? new \Phar($pharPath) : new \PharData($pharPath);
 				$meta = $phar->getMetadata();
 				if(is_array($meta) && isset($meta["build"]) && is_int($meta["build"])){
 					self::$buildNumber = $meta["build"];
