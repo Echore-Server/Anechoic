@@ -23,3 +23,5 @@
 
 - Added `EventPriority::SERVER`
 - Added `EntityDamageEvent::onPostAttack`
+- Removed the logic that throws an exception when specifying unregistered entity on `EntityFactory` to
+  `World::addEntity`

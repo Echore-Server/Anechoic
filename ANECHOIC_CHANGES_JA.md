@@ -23,3 +23,4 @@
 
 - `EventPriority::SERVER` を追加
 - `EntityDamageEvent::onPostAttack` を追加
+- `World::addEntity` に `EntityFactory` に登録されていないエンティティを指定した場合に例外を発生させるロジックを削除

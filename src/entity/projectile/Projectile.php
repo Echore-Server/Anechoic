@@ -129,12 +129,10 @@ abstract class Projectile extends Entity{
 		$this->setHealth(1);
 		$this->damage = $nbt->getDouble(self::TAG_DAMAGE, $this->damage);
 
-		if(($stuckOnBlockPosTag = $nbt->getListTag(self::TAG_STUCK_ON_BLOCK_POS)) !== null){
-			if($stuckOnBlockPosTag->getTagType() !== NBT::TAG_Int || count($stuckOnBlockPosTag) !== 3){
+		if(($stuckOnBlockPosTag = $nbt->getListTag(self::TAG_STUCK_ON_BLOCK_POS, IntTag::class)) !== null){
+			if(count($stuckOnBlockPosTag) !== 3){
 				throw new SavedDataLoadingException(self::TAG_STUCK_ON_BLOCK_POS . " tag should be a list of 3 TAG_Int");
 			}
-
-			/** @var IntTag[] $values */
 			$values = $stuckOnBlockPosTag->getValue();
 
 			$this->blockHit = new Vector3($values[0]->getValue(), $values[1]->getValue(), $values[2]->getValue());
@@ -214,12 +212,15 @@ abstract class Projectile extends Entity{
 				$specificHitFunc = fn() => $this->onHitBlock($objectHit, $rayTraceResult);
 			}
 
+			$motionBeforeOnHit = clone $this->motion;
 			$ev->call();
 			$this->onHit($ev);
 			$specificHitFunc();
 
 			$this->isCollided = $this->onGround = true;
-			$this->motion = Vector3::zero();
+			if($motionBeforeOnHit->equals($this->motion)){
+				$this->motion = Vector3::zero();
+			}
 		}else{
 			$this->isCollided = $this->onGround = false;
 			$this->blockHit = null;
@@ -273,7 +274,17 @@ abstract class Projectile extends Entity{
 			}
 		}
 
-		$this->flagForDespawn();
+		if($this->despawnsOnEntityHit()){
+			$this->flagForDespawn();
+		}
+	}
+
+
+	/**
+	 * @deprecated This will be dropped in favor of deciding whether to despawn within `onHitEntity()` method.
+	 */
+	protected function despawnsOnEntityHit() : bool{
+		return true;
 	}
 
 	/**
