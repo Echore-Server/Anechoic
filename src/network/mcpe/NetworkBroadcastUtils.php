@@ -24,6 +24,7 @@ declare(strict_types=1);
 namespace pocketmine\network\mcpe;
 
 use Closure;
+use pmmp\encoding\ByteBufferWriter;
 use pocketmine\event\server\DataPacketSendEvent;
 use pocketmine\network\mcpe\compression\ZlibCompressor;
 use pocketmine\network\mcpe\convert\TypeConverter;
@@ -68,8 +69,10 @@ final class NetworkBroadcastUtils{
 		$totalLength = 0;
 		$batchBuffer = new BinaryStream();
 		$packetBuffers = [];
+		$writer = new ByteBufferWriter();
 		foreach($packets as $pk){
-			$buffer = NetworkSession::encodePacketTimed(PacketSerializer::encoder(), $pk);
+			$writer->clear();
+			$buffer = NetworkSession::encodePacketTimed($writer, $pk);
 			$bufferLen = strlen($buffer);
 			$totalLength += 2 + $bufferLen;
 
@@ -130,8 +133,11 @@ final class NetworkBroadcastUtils{
 		$totalLength = 0;
 		$batchBuffer = new BinaryStream();
 		$packetBuffers = [];
+		$writer = new ByteBufferWriter();
 		foreach($packets as $pk){
-			$buffer = NetworkSession::encodePacketTimed(PacketSerializer::encoder(), $pk);
+			$writer->clear();
+			// MEMORY REUSING LET'S GO
+			$buffer = NetworkSession::encodePacketTimed($writer, $pk);
 			$bufferLen = strlen($buffer);
 			$totalLength += 2 + $bufferLen;
 
