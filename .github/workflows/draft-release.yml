@@ -67,7 +67,7 @@ jobs:
           repositories: RestrictedActions
 
       - name: Dispatch post-release restricted action
-        uses: peter-evans/repository-dispatch@v3
+        uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ steps.generate-token.outputs.token }}
           repository: ${{ github.repository_owner }}/RestrictedActions
@@ -155,7 +155,7 @@ jobs:
         run: php tools/generate-permission-doc.php rst
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: release_artifacts
           path: |

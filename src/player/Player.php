@@ -2777,7 +2777,7 @@ class Player extends Human implements CommandSender, ChunkListener, IPlayer, Nev
 	}
 
 	protected function checkGroundState(float $wantedX, float $wantedY, float $wantedZ, float $dx, float $dy, float $dz) : void{
-		if(GameMode::SPECTATOR === $this->gamemode){
+		if(!$this->blockCollision){
 			$this->onGround = false;
 		}
 	}
