@@ -90,7 +90,8 @@ final class StandardEntityEventBroadcaster implements EntityEventBroadcaster{
 			$effect->getAmplifier(),
 			$effect->isVisible(),
 			$effect->getDuration(),
-			tick: 0
+			tick: 0,
+			ambient: $effect->isAmbient()
 		));
 	}
 
