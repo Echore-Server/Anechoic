@@ -67,7 +67,6 @@ class ResourcePacksPacketHandler extends PacketHandler{
 	 * correctly, unfortunately there doesn't seem to be a better way to do this
 	 */
 	private const CHEMISTRY_RESOURCE_PACKS = [
-		["0fba4063-dba1-4281-9b89-ff9390653530", "1.26.0"],
 		["b41c2785-c512-4a49-af56-3a87afd47c57", "1.21.30"],
 		["a4df0cb3-17be-4163-88d7-fcf7002b935d", "1.21.20"],
 		["d19adffe-a2e1-4b02-8436-ca4583368c89", "1.21.10"],
