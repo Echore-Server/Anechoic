@@ -478,7 +478,8 @@ class NetworkSession{
 	}
 
 	private function unhandledPacketDebug(Packet $packet, string $buffer, string $label) : void{
-		$this->logger->debug($label . ": " . $packet->getName() . ": " . base64_encode($buffer));
+		// do nothing: Anechoic
+		//$this->logger->debug($label . ": " . $packet->getName() . ": " . base64_encode($buffer));
 	}
 
 	/**
