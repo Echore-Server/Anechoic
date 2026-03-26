@@ -34,7 +34,9 @@ use pocketmine\crafting\CraftingGrid;
 use pocketmine\data\java\GameModeIdMap;
 use pocketmine\entity\animation\Animation;
 use pocketmine\entity\animation\ArmSwingAnimation;
+use pocketmine\entity\animation\ConsumingItemAnimation;
 use pocketmine\entity\animation\CriticalHitAnimation;
+use pocketmine\entity\animation\MagicHitAnimation;
 use pocketmine\entity\Attribute;
 use pocketmine\entity\effect\VanillaEffects;
 use pocketmine\entity\Entity;
@@ -152,7 +154,6 @@ use function assert;
 use function count;
 use function explode;
 use function floor;
-use function fmod;
 use function get_class;
 use function max;
 use function mb_strlen;
@@ -264,6 +265,7 @@ class Player extends Human implements CommandSender, ChunkListener, IPlayer, Nev
 	protected bool $allowFlight = false;
 	protected bool $blockCollision = true;
 	protected bool $flying = false;
+	protected bool $sneakPressed = false;
 	protected float $flightSpeedMultiplier = self::DEFAULT_FLIGHT_SPEED_MULTIPLIER;
 
 	/** @phpstan-var positive-int|null */
@@ -341,6 +343,17 @@ class Player extends Human implements CommandSender, ChunkListener, IPlayer, Nev
 		parent::__construct($spawnLocation, $this->playerInfo->getSkin(), $namedtag);
 	}
 
+	public function setSneakPressed(bool $sneakPressed) : void{
+		$this->sneakPressed = $sneakPressed;
+	}
+
+	/**
+	 * Returns whether the player is pressing the sneak key.
+	 * The player may still be sneaking even if this is false due to gameplay mechanics (e.g. releasing sneak while in a 1.5 block high space).
+	 */
+	public function isSneakPressed() : bool{
+		return $this->sneakPressed;
+	}
 	/**
 	 * Returns the player's locale, e.g. en_US.
 	 */
@@ -1129,6 +1142,14 @@ class Player extends Human implements CommandSender, ChunkListener, IPlayer, Nev
 	}
 
 	/**
+	 * @internal
+	 * Returns whether the server is waiting for a response for a form with the given ID.
+	 */
+	public function hasPendingForm(int $formId) : bool{
+		return isset($this->forms[$formId]);
+	}
+
+	/**
 	 * @param null|Position|Vector3 $pos
 	 */
 	public function setDeathPosition(?Vector3 $pos) : void{
@@ -1379,6 +1400,10 @@ class Player extends Human implements CommandSender, ChunkListener, IPlayer, Nev
 
 			if(null !== $this->blockBreakHandler && !$this->blockBreakHandler->update()){
 				$this->blockBreakHandler = null;
+			}
+
+			if($this->isUsingItem() && $this->getItemUseDuration() % 4 === 0 && ($item = $this->inventory->getItemInHand()) instanceof ConsumableItem){
+				$this->broadcastAnimation(new ConsumingItemAnimation($this, $item));
 			}
 		}
 
@@ -1693,7 +1718,8 @@ class Player extends Human implements CommandSender, ChunkListener, IPlayer, Nev
 		if($slot instanceof ConsumableItem){
 			$oldItem = clone $slot;
 
-			$ev = new PlayerItemConsumeEvent($this, $slot);
+			$residue = $slot->getResidue();
+			$ev = new PlayerItemConsumeEvent($this, $slot, $residue->isNull() ? [] : [$residue]);
 			if($this->hasItemCooldown($slot)){
 				$ev->cancel();
 			}
@@ -1707,7 +1733,7 @@ class Player extends Human implements CommandSender, ChunkListener, IPlayer, Nev
 			$this->resetItemCooldown($oldItem);
 
 			$slot->pop();
-			$this->returnItemsFromAction($oldItem, $slot, [$slot->getResidue()]);
+			$this->returnItemsFromAction($oldItem, $slot, $ev->getResidue());
 
 			return true;
 		}
@@ -1796,7 +1822,9 @@ class Player extends Human implements CommandSender, ChunkListener, IPlayer, Nev
 
 	public function pickEntity(int $entityId) : bool{
 		$entity = $this->getWorld()->getEntity($entityId);
-		if(null === $entity){
+		//TODO: HACK! We really shouldn't be keeping disconnected players (and generally flagged-for-despawn entities)
+		//in the world's entity table, but changing that is too risky for a hotfix. This workaround will do for now.
+		if($entity === null || $entity->isFlaggedForDespawn()){
 			return true;
 		}
 
@@ -1995,6 +2023,9 @@ class Player extends Human implements CommandSender, ChunkListener, IPlayer, Nev
 		if($ev->getModifier(EntityDamageEvent::MODIFIER_CRITICAL) > 0 && $entity instanceof Living){
 			$entity->broadcastAnimation(new CriticalHitAnimation($entity));
 		}
+		if($ev->getModifier(EntityDamageEvent::MODIFIER_WEAPON_ENCHANTMENTS) > 0 && $entity instanceof Living){
+			$entity->broadcastAnimation(new MagicHitAnimation($entity));
+		}
 
 		foreach($meleeEnchantments as $enchantment){
 			$type = $enchantment->getType();
@@ -2101,16 +2132,21 @@ class Player extends Human implements CommandSender, ChunkListener, IPlayer, Nev
 		return true;
 	}
 
-	public function toggleSneak(bool $sneak) : bool{
-		if($sneak === $this->sneaking){
+	public function toggleSneak(bool $sneak, bool $sneakPressed = true) : bool{
+		if($sneak === $this->sneaking && $sneakPressed === $this->sneakPressed){
 			return true;
 		}
-		$ev = new PlayerToggleSneakEvent($this, $sneak);
+		$this->setSneakPressed($sneakPressed);
+
+		$ev = new PlayerToggleSneakEvent($this, $sneak, $sneakPressed);
+		if($sneak === $this->sneaking){
+			$ev->cancel();
+		}
 		$ev->call();
+
 		if($ev->isCancelled()){
 			return false;
 		}
-		$this->setSneaking($sneak);
 
 		return true;
 	}

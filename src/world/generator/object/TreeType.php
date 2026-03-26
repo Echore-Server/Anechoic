@@ -45,8 +45,10 @@ enum TreeType{
 	case JUNGLE;
 	case ACACIA;
 	case DARK_OAK;
-	//TODO: cherry blossom, mangrove, azalea
-	//TODO: do crimson and warped "trees" belong here? I'm not sure if they're actually trees or just fungi
+	case CRIMSON;
+	case WARPED;
+	case AZALEA;
+	//TODO: cherry blossom, mangrove
 	//TODO: perhaps huge mushrooms should be here too???
 
 	public function getDisplayName() : string{
@@ -57,6 +59,9 @@ enum TreeType{
 			self::JUNGLE => "Jungle",
 			self::ACACIA => "Acacia",
 			self::DARK_OAK => "Dark Oak",
+			self::CRIMSON => "Crimson",
+			self::WARPED => "Warped",
+			self::AZALEA => "Azalea",
 		};
 	}
 }
