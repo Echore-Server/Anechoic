@@ -3,19 +3,7 @@ name: Draft release
 on:
   #presume that pull_request_target is safe at this point, since the PR was approved and merged
   #we need write access to prepare the release & create comments
-  pull_request_target:
-    types:
-      - closed
-    branches:
-      - stable
-      - minor-next
-      - major-next
-      - "legacy/*"
-    paths:
-      - "src/VersionInfo.php"
-  push:
-    tags:
-      - "*"
+  workflow_dispatch: 
 
 env:
   PHP_VERSION: "8.2"
