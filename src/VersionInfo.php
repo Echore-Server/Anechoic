@@ -30,12 +30,12 @@ use function is_int;
 use function str_repeat;
 
 final class VersionInfo{
-	public const NAME = "PocketMine-MP";
-	public const ANECHOIC_VERSION = "1.3.0";
-	public const BASE_VERSION = "5.42.1";
+	public const NAME = "Anechoic";
+	public const ANECHOIC_VERSION = "1.3.1";
+	public const BASE_VERSION = "5.43.1";
 	public const IS_DEVELOPMENT_BUILD = true;
 	public const BUILD_CHANNEL = "stable";
-	public const GITHUB_URL = "https://github.com/pmmp/PocketMine-MP";
+	public const GITHUB_URL = "https://github.com/Echore-Server/Anechoic";
 
 	/**
 	 * PocketMine-MP-specific version ID for world data. Used to determine what fixes need to be applied to old world

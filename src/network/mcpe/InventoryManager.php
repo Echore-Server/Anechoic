@@ -522,7 +522,7 @@ class InventoryManager{
 				$windowId,
 				$netSlot,
 				new FullContainerName($this->lastInventoryNetworkId),
-				new ItemStackWrapper(0, ItemStack::null()),
+				null,
 				new ItemStackWrapper(0, ItemStack::null())
 			));
 		}
@@ -531,7 +531,7 @@ class InventoryManager{
 			$windowId,
 			$netSlot,
 			new FullContainerName($this->lastInventoryNetworkId),
-			new ItemStackWrapper(0, ItemStack::null()),
+			null,
 			$itemStackWrapper
 		));
 	}
@@ -664,7 +664,8 @@ class InventoryManager{
 					continue;
 				}
 				$inventory = $entry->inventory;
-				$this->session->getLogger()->debug("Syncing slots " . implode(", ", array_keys($entry->pendingSyncs)) . " in inventory " . get_class($inventory) . "#" . spl_object_id($inventory));
+				// do nothing: Anechoic
+				//$this->session->getLogger()->debug("Syncing slots " . implode(", ", array_keys($entry->pendingSyncs)) . " in inventory " . get_class($inventory) . "#" . spl_object_id($inventory));
 				foreach($entry->pendingSyncs as $slot => $itemStack){
 					$this->syncSlot($inventory, $slot, $itemStack);
 				}
