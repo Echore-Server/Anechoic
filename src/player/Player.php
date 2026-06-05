@@ -2910,7 +2910,12 @@ class Player extends Human implements CommandSender, ChunkListener, IPlayer, Nev
 		$properties->setGenericFlag(EntityMetadataFlags::HAS_COLLISION, $this->hasBlockCollision());
 
 		$properties->setPlayerFlag(PlayerMetadataFlags::SLEEP, null !== $this->sleeping);
-		$properties->setBlockPos(EntityMetadataProperties::PLAYER_BED_POSITION, null !== $this->sleeping ? BlockPosition::fromVector3($this->sleeping) : new BlockPosition(0, 0, 0));
+		if($this->sleeping !== null){
+			//this should only be sent when the player enters the bed, as of 1.26.??
+			//previously we were setting this to 0,0,0 if the player wasn't sleeping, but that now causes the player to
+			//teleport to that position temporarily when leaving the bed. Bugrock moment...
+			$properties->setBlockPos(EntityMetadataProperties::PLAYER_BED_POSITION, BlockPosition::fromVector3($this->sleeping));
+		}
 
 		if(null !== $this->deathPosition && $this->deathPosition->world === $this->location->world){
 			$properties->setBlockPos(EntityMetadataProperties::PLAYER_DEATH_POSITION, BlockPosition::fromVector3($this->deathPosition));
@@ -2921,6 +2926,13 @@ class Player extends Human implements CommandSender, ChunkListener, IPlayer, Nev
 			$properties->setBlockPos(EntityMetadataProperties::PLAYER_DEATH_POSITION, new BlockPosition(0, 0, 0));
 			$properties->setInt(EntityMetadataProperties::PLAYER_DEATH_DIMENSION, DimensionIds::OVERWORLD);
 			$properties->setByte(EntityMetadataProperties::PLAYER_HAS_DIED, 0);
+		}
+	}
+
+	public function onBlockChanged(Vector3 $block) : void{
+		if($this->sleeping !== null && $block->equals($this->sleeping) && !($this->getWorld()->getBlock($block) instanceof Bed)){
+			$this->logger->debug("Bed was changed or deleted, aborting sleep");
+			$this->stopSleep();
 		}
 	}
 
